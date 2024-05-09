@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ble.json",
+  "title": "FEMA Base Level Elevation Extension",
+  "description": "A prototype extension schema for STAC Items and Collections meant to catalog FEMA Base Elevation extent and depth rasters.",
+  "oneOf": [
+    {
+      "title": "BLE STAC Item",
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "properties",
+            "assets"
+          ],
+          "properties": {
+            "type": {
+              "const": "Feature"
+            },
+            "properties": {
+              "type": "object",
+              "required": [
+                "ble:extent_area",
+                "ble:model_dimension",
+                "ble:recurrence_intervals",
+                "ble:huc8"
+              ],
+              "properties": {
+                "ble:model_resolution": {
+                  "title": "Model Grid Resolution",
+                  "description": "Specifies the model grid resolution in meters for 2D gridded models.",
+                  "type": "integer"
+                },
+                "ble:terrain_resolution": {
+                  "title": "Terrain Resolution",
+                  "description": "Specifies the resolution of the terrain used in the model.",
+                  "type": "integer"
+                },
+                "ble:extent_area": {
+                  "title": "Inundated Extent Area",
+                  "description": "Specifies the inundated extent area for different occurrence frequencies in the study.",
+                  "type": "object"
+                },
+                "ble:model_dimension": {
+                  "title": "Hydraulic Model Dimension",
+                  "description": "Specifies whether the hydraulic model is 1D or 2D.",
+                  "type": "integer"
+                },
+                "ble:flow_type": {
+                  "title": "Flow Type",
+                  "description": "Indicates if the rasters were generated using synthetic or observed flows.",
+                  "type": "string"
+                },
+                "ble:recurrence_intervals": {
+                  "title": "Recurrence Intervals",
+                  "description": "Recurrence intervals contained in the raster assets described in the current item.",
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "ble:huc8": {
+                  "title": "HUC8 Evaluation",
+                  "description": "Specifies the HUC8 where the base flood elevation (BFE) evaluation is performed.",
+                  "type": "integer"
+                },
+                "ble:categorical": {
+                  "title": "Categorical Asset IDs",
+                  "description": "List of asset IDs that are categorical rasters.",
+                  "type": "string"
+                },
+                "ble:contiguous": {
+                  "title": "Contiguous Asset IDs",
+                  "description": "List of asset IDs that are contiguous rasters.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ble:elevation_source": {
+                  "title": "Elevation Data Source",
+                  "description": "Specifies the source(s) of elevation data and vertical accuracy (e.g., RMSE) if available.",
+                  "type": "object"
+                }
+              }
+            },
+            "assets": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "BLE STAC Collection",
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "Collection"
+            },
+            "item_assets": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object"
+              }
+            },
+            "links": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
+
