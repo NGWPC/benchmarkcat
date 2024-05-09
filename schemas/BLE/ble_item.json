@@ -13,19 +13,19 @@
     "common_metadata": {
       "allOf": [
         {
-          "$ref": "basics.json"
+          "$ref": "../common_item_metadata/basics.json"
         },
         {
-          "$ref": "datetime.json"
+          "$ref": "../common_item_metadata/datetime.json"
         },
         {
-          "$ref": "instrument.json"
+          "$ref": "../common_item_metadata/instrument.json"
         },
         {
-          "$ref": "licensing.json"
+          "$ref": "../common_item_metadata/licensing.json"
         },
         {
-          "$ref": "provider.json"
+          "$ref": "../common_item_metadata/provider.json"
         }
       ]
     },
