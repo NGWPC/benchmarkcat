@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "./ble_collection.json#",
+  "$id": "https://gitlab.sh.nextgenwaterprediction.com/NGWPC/fim-c/benchmarkcat/-/blob/main/schemas/BLE/ble_collection.json#",
   "title": "BLE Collection Specification",
   "description": "This object represents FEMA base level elevation (BLE) data Collections in a SpatioTemporal Asset Catalog (STAC). The schema is adapted from stac spec v1.",
   "allOf": [
