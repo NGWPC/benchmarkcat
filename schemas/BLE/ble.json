@@ -23,7 +23,7 @@
               "required": [
                 "ble:extent_area",
                 "ble:model_dimension",
-                "ble:recurrence_intervals",
+                "ble:magnitude",
                 "ble:huc8"
               ],
               "properties": {
@@ -50,11 +50,14 @@
                 "ble:flow_type": {
                   "title": "Flow Type",
                   "description": "Indicates if the rasters were generated using synthetic or observed flows.",
-                  "type": "string"
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
-                "ble:recurrence_intervals": {
-                  "title": "Recurrence Intervals",
-                  "description": "Recurrence intervals contained in the raster assets described in the current item.",
+                "ble:magnitude": {
+                  "title": "magnitude",
+                  "description": "Flood magnitudes. For BLE data magnitude is expressed as a recurrence interval contained in the raster assets described in the current item.",
                   "type": "array",
                   "items": {
                     "type": "integer"
@@ -70,14 +73,13 @@
                   "description": "List of asset IDs that are categorical rasters.",
                   "type": "string"
                 },
-                "ble:contiguous": {
-                  "title": "Contiguous Asset IDs",
-                  "description": "List of asset IDs that are contiguous rasters.",
+                "ble:continuous": {
+                  "title": "Continuous Asset IDs",
+                  "description": "List of asset IDs that are continuous rasters.",
                   "type": "array",
                   "items": {
                     "type": "string"
-                  }
-                },
+                  },
                 "ble:elevation_source": {
                   "title": "Elevation Data Source",
                   "description": "Specifies the source(s) of elevation data and vertical accuracy (e.g., RMSE) if available.",
