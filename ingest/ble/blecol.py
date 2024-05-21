@@ -198,17 +198,20 @@ for huc8_path in huc8list[:2]:
             item.add_link(pystac.Link('parent', f's3://{bucket_name}/{collection_object_key}'))
             item.add_link(pystac.Link('root', f's3://{bucket_name}/{catalog_key}'))
 
-        # # Add BLE Extension to the item
-        # BLEExtension.add_to(item)
+        # Apply BLE properties to the item
+        ext_schema =  BLEExtension.get_schema_uri()
+        print(ext_schema)
+        item.stac_extensions.append(ext_schema) 
+        print(item.stac_extensions)
 
-        # # Apply BLE properties to the item
-        # item_ble_ext = BLEExtension.ext(item, add_if_missing=True)
-        # item_ble_ext.apply(
-        #     extent_area={"100 yr extent area": one_hund_extent, "500 yr extent area": five_hund_extent},
-        #     model_dimension=2,
-        #     magnitude=[100, 500],
-        #     huc8=int(huc8),
-        # )
+        item_ble_ext = BLEExtension.ext(item, add_if_missing=True)
+        BLEExtension.get_schema_uri
+        item_ble_ext.apply(
+            extent_area={"100 yr extent area": one_hund_extent, "500 yr extent area": five_hund_extent},
+            model_dimension=2,
+            magnitude=[100, 500],
+            huc8=int(huc8),
+        )
 
         # Define assets for the item
         item.add_asset(
@@ -284,8 +287,4 @@ with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
 # - implement validation that checks collection and item json against BLE collection and item json schemas
 # - check for depth assets and handle exception if not there
 # - add function to compute extent area from tifs
-
-# Discuss:
-# Want to circle back to what exact documents we need. Is the study report and the things we can extract from it enough?
-# is there a copy of the original BLE data where the docs directory isn't zipped or does Abul have a script that will unzip recursively in place? Was struggling with this yesterday afternoon
-# the pystac TableExtension class implements the intent of the authors to only include lists of tables at the collection level. This creates a minor issue with our design since we can't reference the flowfile asset ids at the item level.
+# - Edit code to just put the table column object in items then reference the tables in the BLE extension

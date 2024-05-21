@@ -1,19 +1,21 @@
+from typing import Literal
 import pystac
 from pystac.extensions.base import PropertiesExtension, ExtensionManagementMixin
 from typing import Any, Dict, List, Optional, Union
 
 # Define constants for the BLE extension
-SCHEMA_URI = "https://gitlab.sh.nextgenwaterprediction.com/NGWPC/fim-c/benchmarkcat/-/raw/main/schemas/BLE/ble.json"
-PREFIX = "ble:"
+SCHEMA_URI: str  = "https://example.com/image-order/v1.0.0/schema.json"#"https://gitlab.sh.nextgenwaterprediction.com/NGWPC/fim-c/benchmarkcat/-/raw/main/schemas/BLE/ble.json"
+PREFIX: str = "ble:"
 
-# Define the BLEExtension class
 class BLEExtension(
     PropertiesExtension, 
     ExtensionManagementMixin[Union[pystac.Item, pystac.Collection]]
 ):
-    def __init__(self, obj: Union[pystac.Item, pystac.Collection]) -> None:
-        self.obj = obj
-        self.properties = obj.properties if isinstance(obj, pystac.Item) else obj.extra_fields
+    name: Literal["ble"] = "ble"
+
+    def __init__(self, item: pystac.Item) -> None:
+        self.item = item
+        self.properties = item.properties
 
     def apply(
         self,
@@ -66,7 +68,7 @@ class BLEExtension(
         self._set_property(f"{PREFIX}model_dimension", v)
 
     @property
-    def magnitude(self) -> Optional[List[int]]:
+    def magnitude(self) -> Optional[Dict[str, Any]]:
         return self._get_property(f"{PREFIX}magnitude", List[int])
 
     @magnitude.setter
@@ -134,11 +136,23 @@ class BLEExtension(
         return SCHEMA_URI
 
     @classmethod
-    def ext(cls, obj: Union[pystac.Item, pystac.Collection], add_if_missing: bool = False) -> "BLEExtension":
+    def ext(cls, obj:pystac.Item, add_if_missing: bool = False) -> "BLEExtension":
         if isinstance(obj, pystac.Item):
             cls.ensure_has_extension(obj, add_if_missing)
             return BLEExtension(obj)
         else:
             raise pystac.ExtensionTypeError(
-                f"BLEExtension does not apply to type '{type(obj).__name__}'"
+                f"OrderExtension does not apply to type '{type(obj).__name__}'"
             )
+
+
+# item = pystac.read_file(
+#     "https://raw.githubusercontent.com/radiantearth/stac-spec/master/examples/core-item.json"
+# )
+# item.properties
+
+# print(f"Implements Extension: {BLEExtension.has_extension(item)}")
+
+# order_ext = BLEExtension.ext(item, add_if_missing=True)
+
+# print(f"Implements Extension: {BLEExtension.has_extension(item)}")
