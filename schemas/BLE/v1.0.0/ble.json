@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://gitlab.sh.nextgenwaterprediction.com/NGWPC/fim-c/benchmarkcat/-/raw/main/schemas/BLE/ble.json#",
+  "$id": "~/benchmarkcat/schemas/BLE/v1.0.0/ble.json",
   "title": "FEMA Base Level Elevation Extension",
   "description": "A prototype extension schema for STAC Items and Collections meant to catalog FEMA Base Elevation extent and depth rasters.",
   "oneOf": [
@@ -20,22 +20,22 @@
             },
             "properties": {
               "type": "object",
-              "required": [
-                "ble:extent_area",
-                "ble:model_dimension",
-                "ble:magnitude",
-                "ble:huc8"
-              ],
               "properties": {
                 "ble:model_resolution": {
                   "title": "Model Grid Resolution",
                   "description": "Specifies the model grid resolution in meters for 2D gridded models.",
-                  "type": "integer"
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
                 },
                 "ble:terrain_resolution": {
                   "title": "Terrain Resolution",
                   "description": "Specifies the resolution of the terrain used in the model.",
-                  "type": "integer"
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
                 },
                 "ble:extent_area": {
                   "title": "Inundated Extent Area",
@@ -45,7 +45,10 @@
                 "ble:model_dimension": {
                   "title": "Hydraulic Model Dimension",
                   "description": "Specifies whether the hydraulic model is 1D or 2D.",
-                  "type": "integer"
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
                 },
                 "ble:flow_type": {
                   "title": "Flow Type",
@@ -71,7 +74,10 @@
                 "ble:categorical": {
                   "title": "Categorical Asset IDs",
                   "description": "List of asset IDs that are categorical rasters.",
-                  "type": "string"
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "ble:continuous": {
                   "title": "Continuous Asset IDs",
@@ -79,7 +85,8 @@
                   "type": "array",
                   "items": {
                     "type": "string"
-                  },
+                  }
+                },
                 "ble:elevation_source": {
                   "title": "Elevation Data Source",
                   "description": "Specifies the source(s) of elevation data and vertical accuracy (e.g., RMSE) if available.",
@@ -127,4 +134,3 @@
     }
   ]
 }
-

@@ -1,9 +1,10 @@
+import pdb
+from shapely.geometry import mapping
 import tempfile
 import logging
 import os
 import json
 import rasterio
-import urllib.request
 import pystac
 from pystac.extensions.table import Column, TableExtension
 from pystac.extensions.item_assets import ItemAssetsExtension, AssetDefinition
@@ -11,7 +12,7 @@ from datetime import datetime, timezone
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
 
-from ingest.ble import blestac
+from ingest.ble.blestac import *
 from ingest.ble.ble_ext import BLEExtension
 from ingest import bench
 
@@ -42,9 +43,9 @@ ble_collection = pystac.Collection(
 )
 
 # Add links to the collection
-ble_collection.add_link(pystac.Link('self', f's3://{bucket_name}/{collection_object_key}'))
-ble_collection.add_link(pystac.Link('root', f's3://{bucket_name}/{catalog_key}'))
-ble_collection.add_link(pystac.Link('parent', f's3://{bucket_name}/{catalog_key}'))
+ble_collection.add_link(pystac.Link('self', 'ble.json'))
+ble_collection.add_link(pystac.Link('root', '../../bench_cat.json'))
+ble_collection.add_link(pystac.Link('parent','../../bench_cat.json'))
 
 # Add table extension
 TableExtension.add_to(ble_collection)
@@ -75,49 +76,42 @@ assets = {
         description="Raster of flood extent",
         media_type="image/tiff; application=geotiff",
         roles=["data"],
-        extra_fields={"href": "https://example.com/path/to/extent_raster.tif"}
     ),
     "depth_raster": AssetDefinition.create(
         title="Depth Raster",
         description="Raster of flood depth",
         media_type="image/tiff; application=geotiff",
         roles=["data"],
-        extra_fields={"href": "https://example.com/path/to/depth_raster.tif"}
     ),
     "feature_ids": AssetDefinition.create(
         title="Feature IDs",
         description="GeoJSON of feature IDs",
         media_type="application/geo+json",
         roles=["data"],
-        extra_fields={"href": "https://example.com/path/to/feature_ids.geojson"}
     ),
     "flow_file": AssetDefinition.create(
         title="Flow File",
         description="CSV of flow data",
         media_type="text/csv",
         roles=["data"],
-        extra_fields={"href": "https://example.com/path/to/flow_file.csv"}
     ),
     "hydraulic_parameters": AssetDefinition.create(
         title="Hydraulic Parameters",
         description="XML file of hydraulic parameters",
         media_type="text/xml",
         roles=["metadata"],
-        extra_fields={"href": "https://example.com/path/to/hydraulic_parameters.xml"}
     ),
     "study_map": AssetDefinition.create(
         title="Study Map",
         description="PDF or image of the study map",
         media_type="application/pdf",
         roles=["map"],
-        extra_fields={"href": "https://example.com/path/to/study_map.pdf"}
     ),
     "study_report": AssetDefinition.create(
         title="Study Report",
         description="PDF of the study report",
         media_type="application/pdf",
         roles=["report"],
-        extra_fields={"href": "https://example.com/path/to/study_report.pdf"}
     )
 }
 
@@ -127,16 +121,22 @@ item_assets_ext.item_assets = assets
 
 # Get the list of HUCs
 huc8list = bench.list_subdirectories(bucket_name, asset_object_key, s3)
-print(f"huc8list:{huc8list}")
-for huc8_path in huc8list[:2]:
+
+for huc8_path in huc8list:
     huc8 = huc8_path.strip('/').split('/')[-1]
     print(f"indexing HUC8: {huc8}")
 
     # Asset paths (relative to data object key)
     one_hund_flow = f'{asset_object_key}{huc8}/100yr/ble_huc_{huc8}_flows_100yr.csv'
     one_hund_extent = f'{asset_object_key}{huc8}/100yr/ble_huc_{huc8}_extent_100yr.tif'
+    one_hund_depth = f'{asset_object_key}{huc8}/100yr/ble_huc_{huc8}_depth_100yr.tif'
     five_hund_flow = f'{asset_object_key}{huc8}/500yr/ble_huc_{huc8}_flows_500yr.csv'
     five_hund_extent = f'{asset_object_key}{huc8}/500yr/ble_huc_{huc8}_extent_500yr.tif'
+    five_hund_depth = f'{asset_object_key}{huc8}/500yr/ble_huc_{huc8}_depth_500yr.tif'
+
+    # find doc subdirectories for report asset
+    docdir = bench.find_directories_with_sequence(bucket_name, f'{asset_object_key}alldocs/', s3, huc8)[0]
+    report_doc = bench.list_pdfs_in_directory(bucket_name,docdir,s3)[0]
 
     # Temporary directory to download the file
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -158,28 +158,20 @@ for huc8_path in huc8list[:2]:
         except ClientError as e:
             print(f"Failed to download files: {e}")
             continue
+        # get total inundated extent areas
+        one_hund_extent_area = count_nonzero_pixels(one_hund_extent_path)
+        five_hund_extent_area = count_nonzero_pixels(five_hund_extent_path)
 
         # Use rasterio to extract bbox, resolution, and projection for 100yr extent
         with rasterio.open(one_hund_extent_path) as src:
             bbox = src.bounds
             resolution = src.res
             projection = src.crs.to_string()
-            geometry = {
-                "type": "Polygon",
-                "coordinates": [[
-                    [bbox.left, bbox.bottom],
-                    [bbox.left, bbox.top],
-                    [bbox.right, bbox.top],
-                    [bbox.right, bbox.bottom],
-                    [bbox.left, bbox.bottom]
-                ]]
-            }
-
+            geometry = mapping(bench.get_huc8_geometry(huc8))
             # Create item
             item = pystac.Item(
                 id=f"{huc8}-ble",
                 geometry=geometry,
-                #TODO: polygon property. Want to use the full polygon of the extent.https://docs.hyriver.io/examples/notebooks/nlcd.html extract geometry using huc8 code in hyriver 
                 bbox=list(bbox),
                 collection=ble_collection,
                 datetime=datetime.now(timezone.utc), 
@@ -194,21 +186,16 @@ for huc8_path in huc8list[:2]:
 
             # Add links to the item
             item_object_key = f'{item_base_key}{huc8}_ble.json'
-            item.add_link(pystac.Link('self', f's3://{bucket_name}/{item_object_key}'))
-            item.add_link(pystac.Link('parent', f's3://{bucket_name}/{collection_object_key}'))
-            item.add_link(pystac.Link('root', f's3://{bucket_name}/{catalog_key}'))
+            item.add_link(pystac.Link('self', f'{huc8}_ble.json'))
+            item.add_link(pystac.Link('parent', '../collections/ble/ble.json'))
+            item.add_link(pystac.Link('root', '../../bench_cat.json'))
 
         # Apply BLE properties to the item
-        ext_schema =  BLEExtension.get_schema_uri()
-        print(ext_schema)
-        item.stac_extensions.append(ext_schema) 
-        print(item.stac_extensions)
-
         item_ble_ext = BLEExtension.ext(item, add_if_missing=True)
         BLEExtension.get_schema_uri
         item_ble_ext.apply(
-            extent_area={"100 yr extent area": one_hund_extent, "500 yr extent area": five_hund_extent},
-            model_dimension=2,
+            extent_area={"100 yr extent area": one_hund_extent_area, "500 yr extent area": five_hund_extent_area},
+            model_dimension=[2],
             magnitude=[100, 500],
             huc8=int(huc8),
         )
@@ -232,13 +219,33 @@ for huc8_path in huc8list[:2]:
                 title="500 Year Flood Extent"
             )
         )
+
+        item.add_asset(
+            "depth_raster_100yr",
+            pystac.Asset(
+                href=f"s3://{bucket_name}/{one_hund_depth}",
+                media_type="image/tiff; application=geotiff",
+                roles=["data"],
+                title="100 Year Flood Depth"
+            )
+        )
+        item.add_asset(
+            "depth_raster_500yr",
+            pystac.Asset(
+                href=f"s3://{bucket_name}/{five_hund_depth}",
+                media_type="image/tiff; application=geotiff",
+                roles=["data"],
+                title="500 Year Flood Depth"
+            )
+        )
         item.add_asset(
             "flow_file_100yr",
             pystac.Asset(
                 href=f"s3://{bucket_name}/{one_hund_flow}",
                 media_type="text/csv",
                 roles=["data"],
-                title="100 Year Flow Data"
+                title="100 Year Flow Data",
+                description="The flow file of NWM hydrofabric feature ids and associated discharges for the 100 yr recurrance interval. See the item's table:columns for a description of flow-file columns"
             )
         )
         item.add_asset(
@@ -247,10 +254,19 @@ for huc8_path in huc8list[:2]:
                 href=f"s3://{bucket_name}/{five_hund_flow}",
                 media_type="text/csv",
                 roles=["data"],
-                title="500 Year Flow Data"
+                title="500 Year Flow Data",
+                description="The flow file of NWM hydrofabric feature ids and associated discharges for the 500 yr recurrance interval. See the item's table:columns for a description of flow-file columns"
             )
         )
-
+        item.add_asset(
+        "Study Report",
+        pystac.Asset(
+                href=f"s3://{bucket_name}/{report_doc}",
+                description="PDF of the study report",
+                media_type="application/pdf",
+                roles=["report"]
+        )
+        )
         # Add Table Extension to the item and configure tables
         TableExtension.add_to(item)
         table_ext = TableExtension.ext(item, add_if_missing=True)
@@ -267,8 +283,9 @@ for huc8_path in huc8list[:2]:
             s3.upload_file(temp_file.name, bucket_name, item_object_key)
             os.remove(temp_file.name)
 
-# Print the collection to verify
-print(ble_collection.to_dict())
+        # validate item
+        item.validate()
+
 
 # Write collection to S3
 with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
@@ -279,12 +296,7 @@ with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
     os.remove(temp_file.name)
 
 # Validate 
-# ble_collection.validate()
+ble_collection.validate()
 
 # TODO:
 # - make catalog json, add ble collection, replace absolute paths with relative paths, test resolving links with pystac using absolute catalog root
-# - test pystac validation once environment setup on aws workspace
-# - implement validation that checks collection and item json against BLE collection and item json schemas
-# - check for depth assets and handle exception if not there
-# - add function to compute extent area from tifs
-# - Edit code to just put the table column object in items then reference the tables in the BLE extension

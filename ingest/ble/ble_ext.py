@@ -1,10 +1,14 @@
+import os
 from typing import Literal
 import pystac
 from pystac.extensions.base import PropertiesExtension, ExtensionManagementMixin
 from typing import Any, Dict, List, Optional, Union
+import pdb
 
 # Define constants for the BLE extension
-SCHEMA_URI: str  = "https://example.com/image-order/v1.0.0/schema.json"#"https://gitlab.sh.nextgenwaterprediction.com/NGWPC/fim-c/benchmarkcat/-/raw/main/schemas/BLE/ble.json"
+# SCHEMA_URI: str  = "https://example.com/image-order/v1.0.0/schema.json"
+homedir = os.path.expanduser("~")
+SCHEMA_URI: str = f"file://{homedir}/benchmarkcat/schemas/BLE/v1.0.0/ble.json"
 PREFIX: str = "ble:"
 
 class BLEExtension(
@@ -20,14 +24,14 @@ class BLEExtension(
     def apply(
         self,
         extent_area: Optional[Dict[str, Any]] = None,
-        model_dimension: Optional[int] = None,
+        model_dimension: Optional[List[int]] = None,
         magnitude: Optional[List[int]] = None,
         huc8: Optional[int] = None,
         flow_type: Optional[List[str]] = None,
         continuous: Optional[List[str]] = None,
-        model_resolution: Optional[int] = None,
-        terrain_resolution: Optional[int] = None,
-        categorical: Optional[str] = None,
+        model_resolution: Optional[List[int]] = None,
+        terrain_resolution: Optional[List[int]] = None,
+        categorical: Optional[List[str]] = None,
         elevation_source: Optional[Dict[str, Any]] = None
     ) -> None:
         if extent_area is not None:
@@ -60,15 +64,15 @@ class BLEExtension(
         self._set_property(f"{PREFIX}extent_area", v)
 
     @property
-    def model_dimension(self) -> Optional[int]:
-        return self._get_property(f"{PREFIX}model_dimension", int)
+    def model_dimension(self) -> Optional[List[int]]:
+        return self._get_property(f"{PREFIX}model_dimension", List[int])
 
     @model_dimension.setter
-    def model_dimension(self, v: Optional[int]) -> None:
+    def model_dimension(self, v: Optional[List[int]]) -> None:
         self._set_property(f"{PREFIX}model_dimension", v)
 
     @property
-    def magnitude(self) -> Optional[Dict[str, Any]]:
+    def magnitude(self) -> Optional[List[int]]:
         return self._get_property(f"{PREFIX}magnitude", List[int])
 
     @magnitude.setter
@@ -100,27 +104,27 @@ class BLEExtension(
         self._set_property(f"{PREFIX}continuous", v)
 
     @property
-    def model_resolution(self) -> Optional[int]:
-        return self._get_property(f"{PREFIX}model_resolution", int)
+    def model_resolution(self) -> Optional[List[int]]:
+        return self._get_property(f"{PREFIX}model_resolution", List[int])
 
     @model_resolution.setter
-    def model_resolution(self, v: Optional[int]) -> None:
+    def model_resolution(self, v: Optional[List[int]]) -> None:
         self._set_property(f"{PREFIX}model_resolution", v)
 
     @property
-    def terrain_resolution(self) -> Optional[int]:
-        return self._get_property(f"{PREFIX}terrain_resolution", int)
+    def terrain_resolution(self) -> Optional[List[int]]:
+        return self._get_property(f"{PREFIX}terrain_resolution", List[int])
 
     @terrain_resolution.setter
-    def terrain_resolution(self, v: Optional[int]) -> None:
+    def terrain_resolution(self, v: Optional[List[int]]) -> None:
         self._set_property(f"{PREFIX}terrain_resolution", v)
 
     @property
-    def categorical(self) -> Optional[str]:
-        return self._get_property(f"{PREFIX}categorical", str)
+    def categorical(self) -> Optional[List[str]]:
+        return self._get_property(f"{PREFIX}categorical", List[str])
 
     @categorical.setter
-    def categorical(self, v: Optional[str]) -> None:
+    def categorical(self, v: Optional[List[str]]) -> None:
         self._set_property(f"{PREFIX}categorical", v)
 
     @property
@@ -136,7 +140,7 @@ class BLEExtension(
         return SCHEMA_URI
 
     @classmethod
-    def ext(cls, obj:pystac.Item, add_if_missing: bool = False) -> "BLEExtension":
+    def ext(cls, obj:pystac.Item, add_if_missing: bool = True) -> "BLEExtension":
         if isinstance(obj, pystac.Item):
             cls.ensure_has_extension(obj, add_if_missing)
             return BLEExtension(obj)
@@ -145,14 +149,15 @@ class BLEExtension(
                 f"OrderExtension does not apply to type '{type(obj).__name__}'"
             )
 
-
+# 
 # item = pystac.read_file(
 #     "https://raw.githubusercontent.com/radiantearth/stac-spec/master/examples/core-item.json"
 # )
 # item.properties
-
+# print(item.stac_extensions)
+# print(f"BLEExtesions uri: {BLEExtension.get_schema_uri()}")
 # print(f"Implements Extension: {BLEExtension.has_extension(item)}")
-
+# # pdb.set_trace()
 # order_ext = BLEExtension.ext(item, add_if_missing=True)
 
 # print(f"Implements Extension: {BLEExtension.has_extension(item)}")
