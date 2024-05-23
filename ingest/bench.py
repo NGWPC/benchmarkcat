@@ -1,5 +1,6 @@
 import boto3
 import pygeohydro as pgh
+import os
 
 def get_huc8_geometry(huc8):
     wbd = pgh.WBD("huc8")
@@ -106,3 +107,16 @@ if __name__ == "__main__":
     print("\nDirectories with sequence:")
     for dir in dirs_with_sequence:
         print(dir)
+
+# Function to upload an entire directory to S3
+def upload_directory_to_s3(directory_path, bucket_name, destination_path,client):
+    for root, _, files in os.walk(directory_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            s3_key = os.path.join(destination_path, os.path.relpath(file_path, directory_path))
+            try:
+                client.upload_file(file_path, bucket_name, s3_key)
+                print(f"Uploaded {file_path} to s3://{bucket_name}/{s3_key}")
+            except (NoCredentialsError, ClientError) as e:
+                print(f"Failed to upload {file_path} to s3://{bucket_name}/{s3_key}: {e}")
+

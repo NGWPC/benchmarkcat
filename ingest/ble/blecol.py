@@ -5,6 +5,7 @@ import logging
 import os
 import json
 import rasterio
+import io
 import pystac
 from pystac.extensions.table import Column, TableExtension
 from pystac.extensions.item_assets import ItemAssetsExtension, AssetDefinition
@@ -24,10 +25,28 @@ s3 = boto3.client('s3')
 
 # Specify bucket parameters
 bucket_name = 'fimc-data'
-collection_object_key = 'benchmark/stac-bench-cat/collections/ble/ble.json'
-item_base_key = 'benchmark/stac-bench-cat/items/ble/'
-catalog_key = 'benchmark/stac-bench-cat/bench_cat.json'
+catalog_path = 'benchmark/stac-bench-cat/'
 asset_object_key = 'benchmark/stac-bench-cat/assets/ble/'
+
+# TODO need to figure out why loading the catalog from the s3 bucket then trying to add to it isn't worknig 
+# # Load the STAC catalog created in other script from S3. Doing this so that the collection and item links resolve relative to catalog
+# catalog_response = s3.get_object(Bucket=bucket_name, Key=catalog_key)
+# catalog_content = catalog_response['Body'].read().decode('utf-8')
+# catalog_dict = json.load(io.StringIO(catalog_content))
+# catalog = pystac.Catalog.from_dict(catalog_dict)
+
+# print(json.dumps(catalog.to_dict(), indent=4))
+
+# # remove root href from the catalog or it won't normalize
+# catalog.remove_links('root')
+
+# Define the catalog
+catalog = pystac.Catalog(
+    id='benchmark-catalog',
+    description="Benchmark catalog for NWC FIM models",
+    title="FIM Benchmark Catalog",
+    catalog_type=pystac.CatalogType.SELF_CONTAINED
+    )
 
 # Define the collection
 ble_collection = pystac.Collection(
@@ -39,13 +58,11 @@ ble_collection = pystac.Collection(
         spatial=pystac.SpatialExtent([[-180, -90, 180, 90]]),
         temporal=pystac.TemporalExtent([[None, None]])
     ),
-    license='CC0-1.0',
+    catalog_type=pystac.CatalogType('SELF_CONTAINED'),license='CC0-1.0',
 )
 
-# Add links to the collection
-ble_collection.add_link(pystac.Link('self', 'ble.json'))
-ble_collection.add_link(pystac.Link('root', '../../bench_cat.json'))
-ble_collection.add_link(pystac.Link('parent','../../bench_cat.json'))
+# add collection to catalog
+catalog.add_child(ble_collection,"ble")
 
 # Add table extension
 TableExtension.add_to(ble_collection)
@@ -118,7 +135,6 @@ assets = {
 # Add the assets to the collection
 item_assets_ext = ItemAssetsExtension.ext(ble_collection, add_if_missing=True)
 item_assets_ext.item_assets = assets
-
 # Get the list of HUCs
 huc8list = bench.list_subdirectories(bucket_name, asset_object_key, s3)
 
@@ -184,18 +200,10 @@ for huc8_path in huc8list:
                 }
             )
 
-            # Add links to the item
-            item_object_key = f'{item_base_key}{huc8}_ble.json'
-            item.add_link(pystac.Link('self', f'{huc8}_ble.json'))
-            item.add_link(pystac.Link('parent', '../collections/ble/ble.json'))
-            item.add_link(pystac.Link('root', '../../bench_cat.json'))
-
         # Apply BLE properties to the item
         item_ble_ext = BLEExtension.ext(item, add_if_missing=True)
-        BLEExtension.get_schema_uri
         item_ble_ext.apply(
             extent_area={"100 yr extent area": one_hund_extent_area, "500 yr extent area": five_hund_extent_area},
-            model_dimension=[2],
             magnitude=[100, 500],
             huc8=int(huc8),
         )
@@ -204,6 +212,7 @@ for huc8_path in huc8list:
         item.add_asset(
             "extent_raster_100yr",
             pystac.Asset(
+                # href=f"s3://{bucket_name}/{one_hund_extent}",
                 href=f"s3://{bucket_name}/{one_hund_extent}",
                 media_type="image/tiff; application=geotiff",
                 roles=["data"],
@@ -213,6 +222,7 @@ for huc8_path in huc8list:
         item.add_asset(
             "extent_raster_500yr",
             pystac.Asset(
+                # href=f"s3://{bucket_name}/{five_hund_extent}",
                 href=f"s3://{bucket_name}/{five_hund_extent}",
                 media_type="image/tiff; application=geotiff",
                 roles=["data"],
@@ -223,6 +233,7 @@ for huc8_path in huc8list:
         item.add_asset(
             "depth_raster_100yr",
             pystac.Asset(
+                # href=f"s3://{bucket_name}/{one_hund_depth}",
                 href=f"s3://{bucket_name}/{one_hund_depth}",
                 media_type="image/tiff; application=geotiff",
                 roles=["data"],
@@ -232,6 +243,7 @@ for huc8_path in huc8list:
         item.add_asset(
             "depth_raster_500yr",
             pystac.Asset(
+                # href=f"s3://{bucket_name}/{five_hund_depth}",
                 href=f"s3://{bucket_name}/{five_hund_depth}",
                 media_type="image/tiff; application=geotiff",
                 roles=["data"],
@@ -241,6 +253,7 @@ for huc8_path in huc8list:
         item.add_asset(
             "flow_file_100yr",
             pystac.Asset(
+                # href=f"s3://{bucket_name}/{one_hund_flow}",
                 href=f"s3://{bucket_name}/{one_hund_flow}",
                 media_type="text/csv",
                 roles=["data"],
@@ -251,6 +264,7 @@ for huc8_path in huc8list:
         item.add_asset(
             "flow_file_500yr",
             pystac.Asset(
+                # href=f"s3://{bucket_name}/{five_hund_flow}",
                 href=f"s3://{bucket_name}/{five_hund_flow}",
                 media_type="text/csv",
                 roles=["data"],
@@ -261,6 +275,7 @@ for huc8_path in huc8list:
         item.add_asset(
         "Study Report",
         pystac.Asset(
+                # href=f"s3://{bucket_name}/{report_doc}",
                 href=f"s3://{bucket_name}/{report_doc}",
                 description="PDF of the study report",
                 media_type="application/pdf",
@@ -275,28 +290,16 @@ for huc8_path in huc8list:
         # Add the item to the collection
         ble_collection.add_item(item)
 
-        # Write item to S3
-        with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
-            item_json = item.to_dict()
-            json.dump(item_json, temp_file, indent=4)
-            temp_file.close()
-            s3.upload_file(temp_file.name, bucket_name, item_object_key)
-            os.remove(temp_file.name)
-
         # validate item
-        item.validate()
+        # item.validate()
 
+# Main logic
+with tempfile.TemporaryDirectory() as temp_dir:
+    # Save the catalog to the temporary directory
+    catalog.normalize_and_save(root_href=temp_dir, catalog_type=pystac.CatalogType.SELF_CONTAINED)    
+    
+    # Upload the contents of the temporary directory to S3
+    bench.upload_directory_to_s3(temp_dir, bucket_name, catalog_path,s3)
 
-# Write collection to S3
-with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
-    collection_json = ble_collection.to_dict()
-    json.dump(collection_json, temp_file, indent=4)
-    temp_file.close()
-    s3.upload_file(temp_file.name, bucket_name, collection_object_key)
-    os.remove(temp_file.name)
-
-# Validate 
+ # Validate 
 ble_collection.validate()
-
-# TODO:
-# - make catalog json, add ble collection, replace absolute paths with relative paths, test resolving links with pystac using absolute catalog root
