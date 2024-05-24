@@ -28,25 +28,13 @@ bucket_name = 'fimc-data'
 catalog_path = 'benchmark/stac-bench-cat/'
 asset_object_key = 'benchmark/stac-bench-cat/assets/ble/'
 
-# TODO need to figure out why loading the catalog from the s3 bucket then trying to add to it isn't worknig 
-# # Load the STAC catalog created in other script from S3. Doing this so that the collection and item links resolve relative to catalog
-# catalog_response = s3.get_object(Bucket=bucket_name, Key=catalog_key)
-# catalog_content = catalog_response['Body'].read().decode('utf-8')
-# catalog_dict = json.load(io.StringIO(catalog_content))
-# catalog = pystac.Catalog.from_dict(catalog_dict)
-
-# print(json.dumps(catalog.to_dict(), indent=4))
-
-# # remove root href from the catalog or it won't normalize
-# catalog.remove_links('root')
-
-# Define the catalog
-catalog = pystac.Catalog(
-    id='benchmark-catalog',
-    description="Benchmark catalog for NWC FIM models",
-    title="FIM Benchmark Catalog",
-    catalog_type=pystac.CatalogType.SELF_CONTAINED
-    )
+# Load the STAC catalog created in other script from S3. Doing this so that the collection and item links resolve relative to catalog
+catalog_response = s3.get_object(Bucket=bucket_name, Key=f'{catalog_path}catalog.json')
+catalog_content = catalog_response['Body'].read().decode('utf-8')
+catalog_dict = json.load(io.StringIO(catalog_content))
+catalog = pystac.Catalog.from_dict(catalog_dict)
+# reset root href from the catalog or it won't normalize
+catalog.set_root(catalog)
 
 # Define the collection
 ble_collection = pystac.Collection(
@@ -60,6 +48,8 @@ ble_collection = pystac.Collection(
     ),
     catalog_type=pystac.CatalogType('SELF_CONTAINED'),license='CC0-1.0',
 )
+# clear the ble_collection child in the case that it has been run before
+# TODO insert line to clear the child
 
 # add collection to catalog
 catalog.add_child(ble_collection,"ble")
@@ -135,6 +125,7 @@ assets = {
 # Add the assets to the collection
 item_assets_ext = ItemAssetsExtension.ext(ble_collection, add_if_missing=True)
 item_assets_ext.item_assets = assets
+
 # Get the list of HUCs
 huc8list = bench.list_subdirectories(bucket_name, asset_object_key, s3)
 
@@ -194,7 +185,7 @@ for huc8_path in huc8list:
                 properties={
                     "title": f"HUC8 {huc8} BLE Data",
                     "description": "Extents and depths associated with the 100 yr and 500 yr flood magnitudes of this HUC8 BLE study",
-                    "resolution": resolution,
+                    "resolution": resolution[0],
                     "projection": projection,
                     "license": 'CC0-1.0',
                 }

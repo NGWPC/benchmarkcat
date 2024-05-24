@@ -5,6 +5,10 @@ import boto3
 import pystac
 from botocore.exceptions import NoCredentialsError, ClientError
 
+'''
+Initializes and uploads an empty catalog to be filled in with the collection creation and update scripts inside each submodule.
+'''
+
 # Create an S3 client
 s3 = boto3.client('s3')
 
