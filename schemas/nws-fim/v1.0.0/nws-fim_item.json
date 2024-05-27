@@ -1,9 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://gitlab.sh.nextgenwaterprediction.com/NGWPC/fim-c/benchmarkcat/-/raw/main/schemas/BLE/ble_item.json#",
-  "title": "BLE STAC Item",
+  "$id": "~/benchmarkcat/schemas/nws-fim/v1.0.0/nws-fim_item.json#",
+  "title": "NWS FIM STAC Item",
   "type": "object",
-  "description": "This object represents the metadata for a BLE item in a SpatioTemporal Asset Catalog.",
+  "description": "This object represents the metadata for a NWS FIM item in a SpatioTemporal Asset Catalog. Each item corresponds to a set of model runs for different flood event magnitudes at a specific NWS gauge id.",
   "allOf": [
     {
       "$ref": "#/definitions/core"
@@ -13,19 +13,19 @@
     "common_metadata": {
       "allOf": [
         {
-          "$ref": "../common_item_metadata/basics.json"
+          "$ref": "../../common_item_metadata/basics.json"
         },
         {
-          "$ref": "../common_item_metadata/datetime.json"
+          "$ref": "../../common_item_metadata/datetime.json"
         },
         {
-          "$ref": "../common_item_metadata/instrument.json"
+          "$ref": "../../common_item_metadata/instrument.json"
         },
         {
-          "$ref": "../common_item_metadata/licensing.json"
+          "$ref": "../../common_item_metadata/licensing.json"
         },
         {
-          "$ref": "../common_item_metadata/provider.json"
+          "$ref": "../../common_item_metadata/provider.json"
         }
       ]
     },
@@ -95,18 +95,18 @@
               "type": "string",
               "const": "1.0.0"
             },
-          "stac_extensions": {
-             "title": "STAC extensions",
-             "type": "array",
-             "uniqueItems": true,
-             "items": {
-               "title": "Reference to a JSON Schema",
-               "type": "string",
-               "format": "iri"
+            "stac_extensions": {
+              "title": "STAC extensions",
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "title": "Reference to a JSON Schema",
+                "type": "string",
+                "format": "iri"
               },
-             "default": [
-               "https://gitlab.sh.nextgenwaterprediction.com/NGWPC/fim-c/benchmarkcat/-/raw/main/schemas/BLE/ble.json"
-             ]
+              "default": [
+                "~/benchmarkcat/schemas/nws-fim/v1.0.0/nws-fim.json#"
+              ]
             },
             "id": {
               "title": "Provider ID",

@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "~/benchmarkcat/schemas/BLE/v1.0.0/ble.json",
+  "$id": "~/benchmarkcat/schemas/ble/v1.0.0/ble.json#",
   "title": "FEMA Base Level Elevation Extension",
   "description": "A prototype extension schema for STAC Items and Collections meant to catalog FEMA Base Elevation extent and depth rasters.",
   "oneOf": [

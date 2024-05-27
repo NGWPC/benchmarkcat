@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://gitlab.sh.nextgenwaterprediction.com/NGWPC/fim-c/benchmarkcat/-/raw/main/schemas/BLE/ble_collection.json#",
-  "title": "BLE Collection Specification",
-  "description": "This object represents FEMA base level elevation (BLE) data Collections in a SpatioTemporal Asset Catalog (STAC). The schema is adapted from stac spec v1.",
+  "$id": "~/benchmarkcat/schemas/usgs-fim/v1.0.0/usgs-fim_collection.json#",
+  "title": "USGS-FIM Collection Specification",
+  "description": "This object represents USGS Flood Inundation Mapping (FIM) data Collections in a SpatioTemporal Asset Catalog (STAC). The schema is adapted from the STAC spec v1.",
   "allOf": [
     {
       "$ref": "#/definitions/collection"
@@ -10,8 +10,8 @@
   ],
   "definitions": {
     "collection": {
-      "title": "BLE STAC Collection",
-      "description": "These are the fields specific to a BLE STAC Collection. All other fields are inherited from STAC Catalog.",
+      "title": "USGS-FIM STAC Collection",
+      "description": "These are the fields specific to a USGS-FIM STAC Collection. All other fields are inherited from the STAC Catalog.",
       "type": "object",
       "required": [
         "stac_version",
@@ -21,8 +21,7 @@
         "license",
         "extent",
         "links",
-        "assets",
-        "table:columns"
+        "assets"
       ],
       "properties": {
         "stac_version": {
@@ -40,8 +39,7 @@
             "format": "iri"
           },
           "default": [
-            "https://stac-extensions.github.io/item-assets/v1.0.0/schema.json",
-            "https://stac-extensions.github.io/table/v1.0.0/schema.json"
+            "https://stac-extensions.github.io/item-assets/v1.0.0/schema.json"
           ]
         },
         "type": {
@@ -180,71 +178,37 @@
             "extent_raster": {
               "type": "object",
               "properties": {
-                "href": { "type": "string" },
-                "type": { "const": "image/tiff; application=geotiff" }
+                "href": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "image/tiff; application=geotiff"
+                }
               }
             },
-            "depth_raster": {
+            "rating_curve": {
               "type": "object",
               "properties": {
-                "href": { "type": "string" },
-                "type": { "const": "image/tiff; application=geotiff" }
+                "href": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "text/csv"
+                }
               }
             },
-            "feature_ids": {
+            "flowfile": {
               "type": "object",
               "properties": {
-                "href": { "type": "string" },
-                "type": { "const": "application/geo+json" }
-              }
-            },
-            "flow_file": {
-              "type": "object",
-              "properties": {
-                "href": { "type": "string" },
-                "type": { "const": "text/csv" }
-              }
-            },
-            "hydraulic_parameters": {
-              "type": "object",
-              "properties": {
-                "href": { "type": "string" },
-                "type": { "const": "text/xml" }
-              }
-            },
-            "study_map": {
-              "type": "object",
-              "properties": {
-                "href": { "type": "string" },
-                "type": { "const": "application/pdf OR image/*" }
-              }
-            },
-            "study_report": {
-              "type": "object",
-              "properties": {
-                "href": { "type": "string" },
-                "type": { "const": "application/pdf" }
+                "href": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "text/csv"
+                }
               }
             }
           }
-        },
-        "table:columns": {
-          "type": "array",
-          "title": "Columns",
-          "description": "Mandatory table columns in this collection.",
-          "items": [
-            {
-              "name": "feature_id",
-              "type": "integer",
-              "description": "NWM hydrofabric feature_id"
-            },
-            {
-              "name": "discharge",
-              "type": "number",
-              "description": "Discharge value in m^3/s"
-            }
-          ],
-          "additionalProperties": false
         },
         "links": {
           "title": "Links",
@@ -260,4 +224,3 @@
     }
   }
 }
-

@@ -6,9 +6,8 @@ from typing import Any, Dict, List, Optional, Union
 import pdb
 
 # Define constants for the BLE extension
-# SCHEMA_URI: str  = "https://example.com/image-order/v1.0.0/schema.json"
 homedir = os.path.expanduser("~")
-SCHEMA_URI: str = f"file://{homedir}/benchmarkcat/schemas/BLE/v1.0.0/ble.json"
+SCHEMA_URI: str = f"file://{homedir}/benchmarkcat/schemas/ble/v1.0.0/ble.json"
 PREFIX: str = "ble:"
 
 class BLEExtension(
