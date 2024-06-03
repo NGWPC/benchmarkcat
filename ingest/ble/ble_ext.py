@@ -26,7 +26,7 @@ class BLEExtension(
         model_dimension: Optional[List[int]] = None,
         magnitude: Optional[List[int]] = None,
         huc8: Optional[int] = None,
-        flow_type: Optional[List[str]] = None,
+        flow_type: Optional[str] = None,
         continuous: Optional[List[str]] = None,
         model_resolution: Optional[List[int]] = None,
         terrain_resolution: Optional[List[int]] = None,
@@ -87,11 +87,11 @@ class BLEExtension(
         self._set_property(f"{PREFIX}huc8", v)
 
     @property
-    def flow_type(self) -> Optional[List[str]]:
-        return self._get_property(f"{PREFIX}flow_type", List[str])
+    def flow_type(self) -> Optional[str]:
+        return self._get_property(f"{PREFIX}flow_type", str)
 
     @flow_type.setter
-    def flow_type(self, v: Optional[List[str]]) -> None:
+    def flow_type(self, v: Optional[str]) -> None:
         self._set_property(f"{PREFIX}flow_type", v)
 
     @property

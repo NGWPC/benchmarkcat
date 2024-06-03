@@ -1,0 +1,6 @@
+README
+setup.py
+benchmarkcat.egg-info/PKG-INFO
+benchmarkcat.egg-info/SOURCES.txt
+benchmarkcat.egg-info/dependency_links.txt
+benchmarkcat.egg-info/top_level.txt

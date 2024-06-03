@@ -1,6 +1,33 @@
 import boto3
 import pygeohydro as pgh
 import os
+import rioxarray
+
+def count_pixels(raster_path, values=None):
+    """Function to count pixels in a raster matching specific values.
+    
+    Args:
+        raster_path (str): Path to the raster file.
+        values (list of int, optional): List of integer values to count. Counts non-zero pixels if None.
+                                        
+    Returns:
+        int: Count of pixels matching the criteria.
+    """
+
+    raster = rioxarray.open_rasterio(raster_path, masked=True, chunks=True)
+    band1 = raster.sel(band=1)
+    
+    if values is None:
+        # Default behavior: count non-zero pixels
+        pixel_count = (band1 != 0).sum().compute().item()
+    else:
+        # Count pixels matching any of the specified values
+        mask = False
+        for value in values:
+            mask |= (band1 == value)
+        pixel_count = mask.sum().compute().item()
+    
+    return pixel_count
 
 def get_huc8_geometry(huc8):
     wbd = pgh.WBD("huc8")
@@ -57,19 +84,24 @@ def filter_contains_sequence(sequence):
 def process_directory(bucket, obj):
     return obj['Key']
 
-def filter_pdfs(obj):
-    return obj['Key'].endswith('.pdf')
-
-def process_pdf(bucket, obj):
-    return obj['Key']
-
 # Applications of list_s3_objects with specific filter and process functions
-def list_tifs_in_bucket(bucket, prefix, client):
-    def filter_tif_files(obj):
-        return obj['Key'].endswith('.tif')
-    def process_tif_file(bucket, obj):
-        return f"https://{bucket}.s3.amazonaws.com/{obj['Key']}"
-    return list_s3_objects(bucket, prefix, client, filter_tif_files, process_tif_file)
+def list_files_with_extensions(bucket, prefix, client, extensions):
+    """
+    List files in an S3 bucket under the given prefix that end with any of the specified extensions.
+
+    :param bucket: The name of the S3 bucket.
+    :param prefix: The prefix (path) to list objects from.
+    :param client: The S3 client.
+    :param extensions: A list of file extensions to filter by (e.g., ['.pdf', '.tif']).
+    :return: A list of URLs to the files that match the specified extensions.
+    """
+    def filter_files_with_extensions(obj):
+        return any(obj['Key'].endswith(ext) for ext in extensions)
+    
+    def process_file(bucket, obj):
+        return obj['Key']
+    
+    return list_s3_objects(bucket, prefix, client, filter_files_with_extensions, process_file)
 
 def list_subdirectories(bucket_name, prefix, s3):
     return list_s3_objects(bucket_name, prefix, s3, delimiter='/')
@@ -79,10 +111,32 @@ def find_directories_with_sequence(bucket_name, prefix, s3, digit_sequence):
         return filter_contains_sequence(digit_sequence)(key)
     return list_s3_objects(bucket_name, prefix, s3, combined_filter_func, process_directory, delimiter='/')
 
-def list_pdfs_in_directory(bucket, prefix, client):
-    return list_s3_objects(bucket, prefix, client, filter_pdfs, process_pdf)
+def list_directories_with_keywords(bucket, prefix, client, keywords):
+    """
+    List directories in an S3 bucket under the given prefix that contain any of the list of keywords.
+    """
+    def filter_func(key):
+        return any(keyword in key for keyword in keywords)
+    
+    def process_func(bucket, obj):
+        return obj['Key']
+    
+    return list_s3_objects(bucket, prefix, client, filter_func, process_func, delimiter='/')
 
-# Example usage
+# Function to upload an entire directory to S3
+def upload_directory_to_s3(directory_path, bucket_name, destination_path,client):
+    for root, _, files in os.walk(directory_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            s3_key = os.path.join(destination_path, os.path.relpath(file_path, directory_path))
+            try:
+                client.upload_file(file_path, bucket_name, s3_key)
+                print(f"Uploaded {file_path} to s3://{bucket_name}/{s3_key}")
+            except (NoCredentialsError, ClientError) as e:
+                print(f"Failed to upload {file_path} to s3://{bucket_name}/{s3_key}: {e}")
+
+
+# test usage
 if __name__ == "__main__":
     s3_client = boto3.client('s3')
 
@@ -107,16 +161,4 @@ if __name__ == "__main__":
     print("\nDirectories with sequence:")
     for dir in dirs_with_sequence:
         print(dir)
-
-# Function to upload an entire directory to S3
-def upload_directory_to_s3(directory_path, bucket_name, destination_path,client):
-    for root, _, files in os.walk(directory_path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            s3_key = os.path.join(destination_path, os.path.relpath(file_path, directory_path))
-            try:
-                client.upload_file(file_path, bucket_name, s3_key)
-                print(f"Uploaded {file_path} to s3://{bucket_name}/{s3_key}")
-            except (NoCredentialsError, ClientError) as e:
-                print(f"Failed to upload {file_path} to s3://{bucket_name}/{s3_key}: {e}")
 

@@ -1,11 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "~/benchmarkcat/schemas/usgs-fim/v1.0.0/usgs-fim.json#",
+  "$id": "~/benchmarkcat/schemas/usgs_fim/v1.0.0/usgs_fim.json#",
   "title": "USGS Flood Inundation Mapping Extension",
   "description": "A prototype extension schema for STAC Items and Collections meant to catalog USGS Flood Inundation Mapping (FIM) data created using HEC-RAS hydraulic models.",
   "oneOf": [
     {
-      "title": "USGS-FIM STAC Item",
+      "title": "USGS FIM STAC Item",
       "allOf": [
         {
           "type": "object",
@@ -23,31 +23,36 @@
               "properties": {
                 "geometry": {
                   "title": "Geometry",
-                  "description": "For USGS-FIM, the geometry will be obtained from the domain shapefile.",
+                  "description": "For USGS FIM, the geometry will be obtained from the domain shapefile.",
                   "type": "object",
                   "format": "geojson"
                 },
-                "usgs-fim:huc8": {
+                "usgs_fim:huc8": {
                   "title": "HUC8",
                   "description": "Specifies the HUC8 where the modeling is done.",
                   "type": "integer"
                 },
-                "usgs-fim:gauge": {
+                "usgs_fim:gauge": {
                   "title": "Gauge ID",
-                  "description": "The NWS gauge ID. This is a 4 letter plus 1 number sequence. A single HUC8 can have multiple USGS-FIM studies since a study can be conducted using data from multiple gauges within the HUC8.",
+                  "description": "The NWS gauge ID. This is a 4 letter plus 1 number sequence. A single HUC8 can have multiple USGS FIM studies since a study can be conducted using data from multiple gauges within the HUC8.",
                   "type": "string"
                 },
-                "usgs-fim:magnitude": {
+                "usgs_fim:magnitude": {
                   "title": "Event Magnitudes",
-                  "description": "These are the event magnitudes present in the study. For USGS-FIM data, event magnitudes are framed as: minor, moderate, major, action. For each event magnitude, the asset ID of the raster asset(s) associated with the magnitude are listed.",
+                  "description": "These are the event magnitudes present in the study. For USGS FIM data, event magnitudes are framed as: minor, moderate, major, action. For each event magnitude, the asset ID of the raster asset(s) associated with the magnitude are listed.",
                   "type": "object"
                 },
-                "usgs-fim:attributes": {
+                "usgs_fim:extent_area": {
+                  "title": "Inundated Extent Area",
+                  "description": "Specifies the inundated extent area for different occurrence frequencies in the study.",
+                  "type": "object"
+                },
+                "usgs_fim:attributes": {
                   "title": "Attributes",
                   "description": "A dictionary containing the values, the raster categories they map to, and the standard color mapping of the values if available. This is obtained from the TIFF .vat file or the TIFF header if present.",
                   "type": "object"
                 },
-                "usgs-fim:flowfile": {
+                "usgs_fim:flowfile": {
                   "title": "Flow File",
                   "description": "This is an object adapted from the tables extension 'tables:columns' object that explicitly lists the flow-file asset IDs for the magnitudes present in the study and describes the different columns present in each flowfile.",
                   "type": "object",
@@ -82,7 +87,7 @@
                     }
                   }
                 },
-                "usgs-fim:rating-curve": {
+                "usgs_fim:rating_curve": {
                   "title": "Rating Curve",
                   "description": "This is an object adapted from the tables extension 'tables:columns' object that explicitly lists the rating curve asset IDs and describes the different columns present in the rating curve asset file.",
                   "type": "object",
@@ -116,6 +121,56 @@
                       }
                     }
                   }
+                },
+                "usgs_fim:model_resolution": {
+                  "title": "Model Resolution",
+                  "description": "Specifies the model grid resolution(s) in meters for 2D gridded models.",
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "usgs_fim:terrain_resolution": {
+                  "title": "Terrain Resolution",
+                  "description": "Specifies the resolution(s) of the terrain used in the model.",
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "usgs_fim:model_dimension": {
+                  "title": "Model Dimension",
+                  "description": "Specifies whether the hydraulic model is 1D or 2D.",
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "usgs_fim:flow_type": {
+                  "title": "Flow Type",
+                  "description": "Whether the rasters were generated using synthetic or observed flows.",
+                  "type": "string"
+                },
+                "usgs_fim:categorical": {
+                  "title": "Categorical",
+                  "description": "List the asset ID(s) that are categorical rasters.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "usgs_fim:continuous": {
+                  "title": "Continuous",
+                  "description": "List the asset ID(s) that are continuous rasters.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "usgs_fim:elevation_source": {
+                  "title": "Elevation Source",
+                  "description": "Specify source(s) of elevation data and vertical accuracy and/or RMSE of source if reported.",
+                  "type": "object"
                 }
               }
             },
@@ -130,7 +185,7 @@
       ]
     },
     {
-      "title": "USGS-FIM STAC Collection",
+      "title": "USGS FIM STAC Collection",
       "allOf": [
         {
           "type": "object",
