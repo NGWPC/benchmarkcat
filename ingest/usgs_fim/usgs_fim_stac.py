@@ -3,9 +3,8 @@ import fiona
 import json
 import tempfile
 from fiona.transform import transform_geom
-from shapely.geometry import shape, mapping
-from shapely.ops import transform
-import pyproj
+from shapely.geometry import shape, mapping, MultiPolygon
+from shapely.ops import unary_union
 
 def load_domain_geometry(bucket_name, prefix, s3):
     files = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
@@ -39,35 +38,25 @@ def load_domain_geometry(bucket_name, prefix, s3):
             crs = src.crs
             features = [feature for feature in src]
     
-    geojson = {
-        "type": "FeatureCollection",
-        "features": []
-    }
-    
-    bboxes = []
+    geometries = []
 
     for feature in features:
         geom = feature['geometry']
         transformed_geom = transform_geom(crs, 'EPSG:4326', geom)
         shapely_geom = shape(transformed_geom)
-        bbox = shapely_geom.bounds
-        bboxes.append(bbox)
-        geojson['features'].append({
-            "type": "Feature",
-            "geometry": mapping(shapely_geom),
-            "properties": feature['properties']
-        })
+        geometries.append(shapely_geom)
+    
+    # Combine all geometries into a single MultiPolygon
+    combined_geometry = unary_union(geometries)
+
+    if not isinstance(combined_geometry, MultiPolygon):
+        combined_geometry = MultiPolygon([combined_geometry])
     
     # Calculate the combined bbox
-    minx = min(bbox[0] for bbox in bboxes)
-    miny = min(bbox[1] for bbox in bboxes)
-    maxx = max(bbox[2] for bbox in bboxes)
-    maxy = max(bbox[3] for bbox in bboxes)
-    combined_bbox = [minx, miny, maxx, maxy]
+    bbox = combined_geometry.bounds
+    combined_bbox = [bbox[0], bbox[1], bbox[2], bbox[3]]
     
     # Ensure the output is JSON-serializable
-    for feature in geojson['features']:
-        feature['properties'] = json.loads(json.dumps(feature['properties'], default=str))
-        feature['geometry'] = json.loads(json.dumps(feature['geometry']))
+    geojson_geometry = json.loads(json.dumps(mapping(combined_geometry)))
     
-    return geojson, combined_bbox
+    return geojson_geometry, combined_bbox

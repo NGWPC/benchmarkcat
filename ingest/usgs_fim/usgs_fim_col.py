@@ -31,8 +31,8 @@ asset_object_key = 'hand_fim/test_cases/usgs_test_cases/validation_data_usgs/'
 usgs_fim_col = pystac.Collection(
     id='usgs-fim-collection',
     description="This is a collection of base level elevation (usgs-fim) maps meant to be used to benchmark the performance of the National Water Centers Height Above Nearest Drainage (HAND) Maps",
-    title="FEMA-usgs-fim-benchmark-flood-rasters",
-    keywords=["FEMA", "flood", "usgs-fim", "model", "extents", "depths"],
+    title="usgs-fim-benchmark-flood-rasters",
+    keywords=["flood", "usgs-fim", "model", "extents", "depths"],
     extent=pystac.Extent(
         spatial=pystac.SpatialExtent([[-180, -90, 180, 90]]),
         temporal=pystac.TemporalExtent([[None, None]])
@@ -83,7 +83,7 @@ item_assets_ext.item_assets = assets
 # Get the list of HUCs
 huc8list = bench.list_subdirectories(bucket_name, asset_object_key, s3)
 
-for huc8_path in huc8list[0:1]:
+for huc8_path in huc8list:
     print(f"huc8_path: {huc8_path}")
     huc8 = huc8_path.strip('/').split('/')[-1]
     print(f"indexing HUC8: {huc8}")
