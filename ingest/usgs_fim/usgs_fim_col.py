@@ -22,6 +22,9 @@ logging.basicConfig(level=logging.INFO)
 # Create an S3 client
 s3 = boto3.client('s3')
 
+# link type set to 'url' for a signed url and 'uri' for an s3 uri
+link_type = 'url'
+
 # Specify bucket parameters
 bucket_name = 'fimc-data'
 catalog_path = 'benchmark/stac-bench-cat/'
@@ -45,7 +48,7 @@ ItemAssetsExtension.add_to(usgs_fim_col)
 
 assets = {
     "thumbnail": AssetDefinition.create(
-        title="Extent Raster",
+        title="Extent thumbnail",
         description="An quicklook showing one of the modeled flood extents for the region",
         media_type="image/png",
         roles=["thumbnail"],
@@ -88,6 +91,7 @@ for huc8_path in huc8list:
     huc8 = huc8_path.strip('/').split('/')[-1]
     print(f"indexing HUC8: {huc8}")
     # pdb.set_trace()
+    thumbnail_created = False
     # need to go gauge by gauge
     for gauge_path in bench.list_subdirectories(bucket_name,huc8_path,s3):
         print(f"gauge_path: {gauge_path}")
@@ -111,7 +115,7 @@ for huc8_path in huc8list:
         item.add_asset(
         "rating curve",
         pystac.Asset(
-                href=f"s3://{bucket_name}/{gauge_path}/{gauge}_rating_curve.csv",
+                href= bench.generate_href(bucket_name, f"{gauge_path}/{gauge}_rating_curve.csv", s3, link_type),
                 description="rating curve csv used for event stages",
                 media_type="text/csv",
                 roles=["data"]
@@ -135,7 +139,7 @@ for huc8_path in huc8list:
             # get the s3 path to the flowfile
             flow_path = bench.list_files_with_extensions(bucket_name,magnitude_path,s3,['csv'])[0]
             print(f"flow_path: {flow_path}")
-            
+                          
             # Temporary directory to download the extent files to extract extent area
             with tempfile.TemporaryDirectory() as tmpdir:
                 local_extent_path = os.path.join(tmpdir, f'{magnitude}_extent.tif')
@@ -151,6 +155,29 @@ for huc8_path in huc8list:
                     print(f"Failed to download files: {e}")
                     continue
 
+                # Create a thumbnail for the first gauge
+                if not thumbnail_created:
+                    local_thumbnail_path = os.path.join(tmpdir, f'{magnitude}_thumbnail.png')
+
+                    # Create thumbnail
+                    bench.create_preview(local_extent_path, local_thumbnail_path)                
+                    # Upload thumbnail to S3
+                    thumbnail_s3_key = f'{gauge_path}/{gauge}_{magnitude}_thumbnail.png'
+                    s3.upload_file(local_thumbnail_path, bucket_name, thumbnail_s3_key)
+
+                    # add thumbnail to item
+                    item.add_asset(
+                        f"{magnitude}_thumbnail",
+                        pystac.Asset(
+                            href= bench.generate_href(bucket_name, thumbnail_s3_key, s3, link_type),
+                            media_type="image/png",
+                            roles=["thumbnail"],
+                            title=f"{magnitude} thumbnail"
+                        )
+                    )
+                    
+                    thumbnail_created = True
+
                 # get total inundated extent areas
                 extent_area = bench.count_pixels(local_extent_path)
                 extent_areas[f"{magnitude}_extent_raster"] = extent_area
@@ -159,7 +186,7 @@ for huc8_path in huc8list:
             item.add_asset(
                 f"{magnitude}_extent_raster",
                 pystac.Asset(
-                    href=f"s3://{bucket_name}/{extent_path}",
+                    href= bench.generate_href(bucket_name, extent_path, s3, link_type),
                     media_type="image/tiff; application=geotiff",
                     roles=["data"],
                     title=f"{magnitude} Flood Extent"
@@ -168,7 +195,7 @@ for huc8_path in huc8list:
             item.add_asset(
                 f"{magnitude}_flow_file",
                 pystac.Asset(
-                    href=f"s3://{bucket_name}/{flow_path}",
+                    href= bench.generate_href(bucket_name, flow_path, s3, link_type),
                     media_type="text/csv",
                     roles=["data"],
                     title=f"{magnitude} flood magnitude flowfile Data",
@@ -199,27 +226,23 @@ for huc8_path in huc8list:
 # add collection to catalog then write directory to s3
 with tempfile.TemporaryDirectory() as temp_dir:
 
-    # Load the STAC catalog created in other script from S3. Doing this so that the collection and item links resolve relative to catalog
-    catalog_response = s3.get_object(Bucket=bucket_name, Key=f'{catalog_path}catalog.json')
-    catalog_content = catalog_response['Body'].read().decode('utf-8')
-    catalog_dict = json.load(io.StringIO(catalog_content))
-    catalog = pystac.Catalog.from_dict(catalog_dict)
-
-    # Write the JSON content to a file in the temporary directory
-    catalog_file_path = os.path.join(temp_dir, 'catalog.json')
-    with open(catalog_file_path, 'w') as f:
-        json.dump(catalog_dict, f, indent=4)
-
-    catalog.set_self_href(f"{temp_dir}/catalog.json")
+    # Download the catalog and all child collections to the temporary directory
+    catalog_key = f'{catalog_path}catalog.json'
+    pdb.set_trace()
+    catalog, catalog_local_path = bench.download_catalog_and_collections(catalog_key, s3, bucket_name, temp_dir)
 
     # set root and self href for the catalog so can add/update the collection
     catalog.set_root(catalog)
-    # remove child incase collection being updated. TODO: test to see if this is even necessary
-    # catalog.remove_child('usgs-fim-collection')
-    # add collection to catalog
+    catalog.set_self_href(catalog_local_path)
+
+    # remove child in case collection being updated
+    try:
+        catalog.remove_child('usgs-fim-collection')
+    except KeyError:
+        pass
+
+    # Add collection to catalog
     catalog.add_child(usgs_fim_col)
-    # print("current catalog")
-    # print(json.dumps(usgs_fim_col.to_dict(), indent=4))
 
     # Resave the catalog to the temporary directory after adding in the collection
     catalog.normalize_and_save(root_href=temp_dir, catalog_type=pystac.CatalogType.SELF_CONTAINED, skip_unresolved=True)    
@@ -229,4 +252,3 @@ with tempfile.TemporaryDirectory() as temp_dir:
 
  # Validate 
 usgs_fim_col.validate()
-

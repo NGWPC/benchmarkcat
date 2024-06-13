@@ -1,7 +1,58 @@
 import boto3
+import io
+import json
+import pystac
 import pygeohydro as pgh
 import os
 import rioxarray
+import rasterio
+import numpy as np
+from PIL import Image
+
+def create_preview(raster, preview_path, size=(256, 256)):
+    with rasterio.open(raster) as src:
+        # Read the single band
+        img_data = src.read(1)
+        
+        try:
+            # Attempt to retrieve the colormap from the raster
+            colormap = src.colormap(1)
+        except ValueError:
+            colormap = None
+        
+        if colormap:
+            # Initialize an empty RGB(A) array
+            img_data_rgba = np.zeros((img_data.shape[0], img_data.shape[1], 4), dtype=np.uint8)
+            
+            # Apply the colormap to create an RGBA representation
+            for index, color in colormap.items():
+                mask = img_data == index
+                img_data_rgba[mask] = color  # Color is expected to be RGBA
+        else:
+            # Apply a binary colormap (white for zero values, black for nonzero values)
+            img_data_rgba = np.zeros((img_data.shape[0], img_data.shape[1], 4), dtype=np.uint8)
+            img_data_rgba[img_data == 0] = [255, 255, 255, 255]  # White color for zero values (RGBA)
+            img_data_rgba[img_data != 0] = [0, 0, 0, 255]        # Black color for nonzero values (RGBA)
+        
+        # Convert the RGBA array to a PIL Image
+        pil_image = Image.fromarray(img_data_rgba, 'RGBA')
+
+        # Calculate new size to maintain aspect ratio
+        img_width, img_height = pil_image.size
+        max_width, max_height = size
+
+        # Determine the scale factor to fit within the given size
+        scale = min(max_width / img_width, max_height / img_height)
+
+        # Compute new size to maintain aspect ratio
+        new_width = int(img_width * scale)
+        new_height = int(img_height * scale)
+
+        # Resize the image with new size
+        preview = pil_image.resize((new_width, new_height), resample=Image.Resampling.LANCZOS)
+
+        # Save the preview
+        preview.save(preview_path, format="PNG")
 
 def count_pixels(raster_path, values=None):
     """Function to count pixels in a raster matching specific values.
@@ -123,6 +174,40 @@ def list_directories_with_keywords(bucket, prefix, client, keywords):
     
     return list_s3_objects(bucket, prefix, client, filter_func, process_func, delimiter='/')
 
+def download_catalog_and_collections(catalog_key, s3, bucket_name, tmp_dir):
+    """Download a catalog and all its top-level collections."""
+    # Download the catalog
+    catalog_response = s3.get_object(Bucket=bucket_name, Key=catalog_key)
+    catalog_content = catalog_response['Body'].read().decode('utf-8')
+    catalog_dict = json.load(io.StringIO(catalog_content))
+    
+    # Save the catalog file to the temporary directory
+    catalog_local_path = os.path.join(tmp_dir, os.path.basename(catalog_key))
+    with open(catalog_local_path, 'w') as f:
+        json.dump(catalog_dict, f, indent=4)
+
+    catalog = pystac.Catalog.from_dict(catalog_dict)
+    
+    # Download each top-level collection
+    for link in catalog.get_child_links():
+        child_relative_path = link.target  # Get the relative path from the link
+        catalog_dir = os.path.dirname(catalog_key)
+        child_s3_key = os.path.normpath(os.path.join(catalog_dir, child_relative_path))
+        child_local_path = os.path.join(tmp_dir, child_relative_path)
+        
+        os.makedirs(os.path.dirname(child_local_path), exist_ok=True)
+        
+        # Download the child collection
+        child_response = s3.get_object(Bucket=bucket_name, Key=child_s3_key)
+        child_content = child_response['Body'].read().decode('utf-8')
+        child_dict = json.load(io.StringIO(child_content))
+        
+        # Save the child collection to the temporary directory
+        with open(child_local_path, 'w') as f:
+            json.dump(child_dict, f, indent=4)
+    
+    return catalog, catalog_local_path
+
 # Function to upload an entire directory to S3
 def upload_directory_to_s3(directory_path, bucket_name, destination_path,client):
     for root, _, files in os.walk(directory_path):
@@ -135,6 +220,34 @@ def upload_directory_to_s3(directory_path, bucket_name, destination_path,client)
             except (NoCredentialsError, ClientError) as e:
                 print(f"Failed to upload {file_path} to s3://{bucket_name}/{s3_key}: {e}")
 
+def generate_href(bucket_name, path, s3_client, link_type, expiration=7*24*60*60):
+    """
+    Generates either a signed URL or an S3 URI.
+
+    param bucket_name: The name of the S3 bucket.
+    :param extent_path: The path to the object in the S3 bucket.
+    :param s3_client: The boto3 S3 client.
+    :param link_type: The type of link to generate ('url' for signed URL, 'uri' for S3 URI).
+    :param expiration: The expiration time for the signed URL in seconds (default is 1 week).
+    :return: The generated link (signed URL or S3 URI).
+    """
+    try:
+        if link_type == 'url':
+            # Generate the signed URL
+            signed_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': bucket_name, 'Key': path},
+                ExpiresIn=expiration
+            )
+            return signed_url
+        elif link_type == 'uri':
+            # Generate the S3 URI
+            s3_uri = f"s3://{bucket_name}/{path}"
+            return s3_uri
+        else:
+            raise ValueError("link_type must be either 'url' or 'uri'")
+    except NoCredentialsError:
+        return "Credentials not available"
 
 # test usage
 if __name__ == "__main__":
@@ -143,12 +256,6 @@ if __name__ == "__main__":
     bucket_name = 'your-bucket-name'
     prefix = 'your/prefix/path/'
     digit_sequence = '12100202'
-
-    # List TIFF files in bucket
-    tifs = list_tifs_in_bucket(bucket_name, prefix, s3_client)
-    print("TIFF files:")
-    for tif in tifs:
-        print(tif)
 
     # List subdirectories in bucket
     subdirs = list_subdirectories(bucket_name, prefix, s3_client)

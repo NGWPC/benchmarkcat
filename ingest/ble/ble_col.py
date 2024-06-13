@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
 
-from ingest.ble.blestac import *
+from ingest.ble.ble_stac import *
 from ingest.ble.ble_ext import BLEExtension
 from ingest import bench
 
@@ -28,13 +28,16 @@ bucket_name = 'fimc-data'
 catalog_path = 'benchmark/stac-bench-cat/'
 asset_object_key = 'benchmark/stac-bench-cat/assets/ble/'
 
+# link type set to 'url' for a signed url and 'uri' for an s3 uri
+link_type = 'url'
+
 # Load the STAC catalog created in other script from S3. Doing this so that the collection and item links resolve relative to catalog
-catalog_response = s3.get_object(Bucket=bucket_name, Key=f'{catalog_path}catalog.json')
-catalog_content = catalog_response['Body'].read().decode('utf-8')
-catalog_dict = json.load(io.StringIO(catalog_content))
-catalog = pystac.Catalog.from_dict(catalog_dict)
-# reset root href from the catalog or it won't normalize
-catalog.set_root(catalog)
+# catalog_response = s3.get_object(Bucket=bucket_name, Key=f'{catalog_path}catalog.json')
+# catalog_content = catalog_response['Body'].read().decode('utf-8')
+# catalog_dict = json.load(io.StringIO(catalog_content))
+# catalog = pystac.Catalog.from_dict(catalog_dict)
+# # reset root href from the catalog or it won't normalize
+# catalog.set_root(catalog)
 
 # Define the collection
 ble_collection = pystac.Collection(
@@ -52,7 +55,7 @@ ble_collection = pystac.Collection(
 # TODO insert line to clear the child
 
 # add collection to catalog
-catalog.add_child(ble_collection,"ble")
+# catalog.add_child(ble_collection,"ble")
 
 # Add table extension
 TableExtension.add_to(ble_collection)
@@ -143,7 +146,7 @@ for huc8_path in huc8list:
 
     # find doc subdirectories for report asset
     docdir = bench.find_directories_with_sequence(bucket_name, f'{asset_object_key}alldocs/', s3, huc8)[0]
-    report_doc = bench.list_pdfs_in_directory(bucket_name,docdir,s3)[0]
+    # report_doc = bench.list_pdfs_in_directory(bucket_name,docdir,s3)[0]
 
     # Temporary directory to download the file
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -166,8 +169,8 @@ for huc8_path in huc8list:
             print(f"Failed to download files: {e}")
             continue
         # get total inundated extent areas
-        one_hund_extent_area = count_nonzero_pixels(one_hund_extent_path)
-        five_hund_extent_area = count_nonzero_pixels(five_hund_extent_path)
+        # one_hund_extent_area = count_nonzero_pixels(one_hund_extent_path)
+        # five_hund_extent_area = count_nonzero_pixels(five_hund_extent_path)
 
         # Use rasterio to extract bbox, resolution, and projection for 100yr extent
         with rasterio.open(one_hund_extent_path) as src:
@@ -194,7 +197,7 @@ for huc8_path in huc8list:
         # Apply BLE properties to the item
         item_ble_ext = BLEExtension.ext(item, add_if_missing=True)
         item_ble_ext.apply(
-            extent_area={"100 yr extent area": one_hund_extent_area, "500 yr extent area": five_hund_extent_area},
+            # extent_area={"100 yr extent area": one_hund_extent_area, "500 yr extent area": five_hund_extent_area},
             magnitude=[100, 500],
             huc8=int(huc8),
         )
@@ -204,7 +207,7 @@ for huc8_path in huc8list:
             "extent_raster_100yr",
             pystac.Asset(
                 # href=f"s3://{bucket_name}/{one_hund_extent}",
-                href=f"s3://{bucket_name}/{one_hund_extent}",
+                href= bench.generate_href(bucket_name, one_hund_extent, s3, link_type),
                 media_type="image/tiff; application=geotiff",
                 roles=["data"],
                 title="100 Year Flood Extent"
@@ -214,7 +217,7 @@ for huc8_path in huc8list:
             "extent_raster_500yr",
             pystac.Asset(
                 # href=f"s3://{bucket_name}/{five_hund_extent}",
-                href=f"s3://{bucket_name}/{five_hund_extent}",
+                href= bench.generate_href(bucket_name, five_hund_extent, s3, link_type),
                 media_type="image/tiff; application=geotiff",
                 roles=["data"],
                 title="500 Year Flood Extent"
@@ -225,7 +228,7 @@ for huc8_path in huc8list:
             "depth_raster_100yr",
             pystac.Asset(
                 # href=f"s3://{bucket_name}/{one_hund_depth}",
-                href=f"s3://{bucket_name}/{one_hund_depth}",
+                href= bench.generate_href(bucket_name, one_hund_depth, s3, link_type),
                 media_type="image/tiff; application=geotiff",
                 roles=["data"],
                 title="100 Year Flood Depth"
@@ -235,7 +238,7 @@ for huc8_path in huc8list:
             "depth_raster_500yr",
             pystac.Asset(
                 # href=f"s3://{bucket_name}/{five_hund_depth}",
-                href=f"s3://{bucket_name}/{five_hund_depth}",
+                href= bench.generate_href(bucket_name, five_hund_depth, s3, link_type),
                 media_type="image/tiff; application=geotiff",
                 roles=["data"],
                 title="500 Year Flood Depth"
@@ -245,7 +248,7 @@ for huc8_path in huc8list:
             "flow_file_100yr",
             pystac.Asset(
                 # href=f"s3://{bucket_name}/{one_hund_flow}",
-                href=f"s3://{bucket_name}/{one_hund_flow}",
+                href= bench.generate_href(bucket_name, one_hund_flow, s3, link_type),
                 media_type="text/csv",
                 roles=["data"],
                 title="100 Year Flow Data",
@@ -256,23 +259,23 @@ for huc8_path in huc8list:
             "flow_file_500yr",
             pystac.Asset(
                 # href=f"s3://{bucket_name}/{five_hund_flow}",
-                href=f"s3://{bucket_name}/{five_hund_flow}",
+                href= bench.generate_href(bucket_name, five_hund_flow, s3, link_type),
                 media_type="text/csv",
                 roles=["data"],
                 title="500 Year Flow Data",
                 description="The flow file of NWM hydrofabric feature ids and associated discharges for the 500 yr recurrance interval. See the item's table:columns for a description of flow-file columns"
             )
         )
-        item.add_asset(
-        "Study Report",
-        pystac.Asset(
-                # href=f"s3://{bucket_name}/{report_doc}",
-                href=f"s3://{bucket_name}/{report_doc}",
-                description="PDF of the study report",
-                media_type="application/pdf",
-                roles=["report"]
-        )
-        )
+        # item.add_asset(
+        # "Study Report",
+        # pystac.Asset(
+        #         # href=f"s3://{bucket_name}/{report_doc}",
+        #         href=f"s3://{bucket_name}/{report_doc}",
+        #         description="PDF of the study report",
+        #         media_type="application/pdf",
+        #         roles=["report"]
+        # )
+        # )
         # Add Table Extension to the item and configure tables
         TableExtension.add_to(item)
         table_ext = TableExtension.ext(item, add_if_missing=True)
@@ -286,6 +289,32 @@ for huc8_path in huc8list:
 
 # Main logic
 with tempfile.TemporaryDirectory() as temp_dir:
+
+    # # Load the STAC catalog created in other script from S3. Doing this so that the collection and item links resolve relative to catalog
+    # catalog_response = s3.get_object(Bucket=bucket_name, Key=f'{catalog_path}catalog.json')
+    # catalog_content = catalog_response['Body'].read().decode('utf-8')
+    # catalog_dict = json.load(io.StringIO(catalog_content))
+    # catalog = pystac.Catalog.from_dict(catalog_dict)
+
+    # # Write the JSON content to a file in the temporary directory
+    # catalog_file_path = os.path.join(temp_dir, 'catalog.json')
+    # with open(catalog_file_path, 'w') as f:
+    #     json.dump(catalog_dict, f, indent=4)
+    catalog = pystac.Catalog(
+    id='benchmark-catalog',
+    description="Benchmark catalog for NWC FIM models",
+    title="FIM Benchmark Catalog",
+    )
+
+    catalog.set_self_href(f"{temp_dir}/catalog.json")
+
+    # set root and self href for the catalog so can add/update the collection
+    catalog.set_root(catalog)
+    # remove child incase collection being updated. TODO: test to see if this is even necessary
+    # catalog.remove_child('usgs-fim-collection')
+    # add collection to catalog
+    catalog.add_child(ble_collection)
+ 
     # Save the catalog to the temporary directory
     catalog.normalize_and_save(root_href=temp_dir, catalog_type=pystac.CatalogType.SELF_CONTAINED)    
     
