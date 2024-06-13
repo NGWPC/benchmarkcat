@@ -127,10 +127,6 @@ def list_s3_objects(bucket, prefix, client, filter_func=None, process_func=None,
     return results
 
 # Specific filtering and processing functions
-def filter_contains_sequence(sequence):
-    def filter_func(key):
-        return sequence in key
-    return filter_func
 
 def process_directory(bucket, obj):
     return obj['Key']
@@ -157,22 +153,19 @@ def list_files_with_extensions(bucket, prefix, client, extensions):
 def list_subdirectories(bucket_name, prefix, s3):
     return list_s3_objects(bucket_name, prefix, s3, delimiter='/')
 
-def find_directories_with_sequence(bucket_name, prefix, s3, digit_sequence):
-    def combined_filter_func(key):
-        return filter_contains_sequence(digit_sequence)(key)
-    return list_s3_objects(bucket_name, prefix, s3, combined_filter_func, process_directory, delimiter='/')
+def list_resources_with_string(bucket, prefix, client, keywords,delimiter=None):
+    """
+    List files or directories in an S3 bucket under the given prefix that contain any of the list of strings (keywords).
 
-def list_directories_with_keywords(bucket, prefix, client, keywords):
+    If you want to return directories then set delimiter equal to '/'
     """
-    List directories in an S3 bucket under the given prefix that contain any of the list of keywords.
-    """
-    def filter_func(key):
-        return any(keyword in key for keyword in keywords)
-    
+
+    def filter_func(obj):
+        return any(keyword in obj['Key'] for keyword in keywords)    
     def process_func(bucket, obj):
         return obj['Key']
     
-    return list_s3_objects(bucket, prefix, client, filter_func, process_func, delimiter='/')
+    return list_s3_objects(bucket, prefix, client, filter_func, process_func, delimiter=delimiter)
 
 def download_catalog_and_collections(catalog_key, s3, bucket_name, tmp_dir):
     """Download a catalog and all its top-level collections."""
