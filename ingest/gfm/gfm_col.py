@@ -53,7 +53,8 @@ gfm_col = pystac.Collection(
         'constellation': ['Copernicus'],
         'instruments': ['SAR'],
         'datetime': [datetime(2015, 1, 1, tzinfo=timezone.utc).isoformat(), None],
-        'providers': ['GLOFAS']
+        'providers': ['GLOFAS'],
+        'GFM_layers': layers
     })
 )
 
@@ -97,36 +98,42 @@ assets = {
         media_type="image/tiff; application=geotiff",
         roles=["data"]
     ),
-    "river-depth": AssetDefinition.create(
-        title="River Depth",
-        description="Estimated WDFI flood classification river depths in areas within the exclusion mask.",
+    "likelihood-values": AssetDefinition.create(
+        title="Likelihood values",
+        description="Estimated likelihood of flood classification, for all areas outside the exclusion mask.",
         media_type="image/tiff; application=geotiff",
         roles=["data"]
     ),
-    "modelled-flood-extent": AssetDefinition.create(
-        title="Modeled flood extent",
-        description="Flood extent, as supplied based on the DFO events selected. Negative mask for areas observed as non-flooded based on Copernicus GloFAS flood extent.",
+    "affected-landcover": AssetDefinition.create(
+        title="Affected landcover",
+        description="Land cover / use (e.g. artificial surfaces, agricultural areas) in flooded areas, mapped by a spatial overlay of observed flood extent and the Copernicus GLS land cover.",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "affected-population": AssetDefinition.create(
+        title="Affected population",
+        description="Number of people in flooded areas, mapped by a spatial overlay of observed flood extent and gridded population, from the Copernicus GHSL project.",
         media_type="image/tiff; application=geotiff",
         roles=["data"]
     ),
     "advisory-flags": AssetDefinition.create(
-        title="Advisory Flags",
-        description="Advisory flags related to confidence, ice flag, prevailing environmental conditions, and applied analytics/extents.",
+        title="Advisory flags",
+        description="Flags indicating potential reduced quality of flood mapping, due to prevailing environmental conditions (e.g. wind, ice, snow, dry soil), or degraded input data quality due to signal interference from other SAR missions.",
         media_type="image/tiff; application=geotiff",
         roles=["data"]
     ),
-    "rmse": AssetDefinition.create(
-        title="RMSE",
-        description="Root mean square error (RMSE) values as compared to areas of the Sentinel-1 observation tiles.",
+    "sentinel-1-metadata": AssetDefinition.create(
+        title="Sentinel-1 metadata",
+        description="Information on the acquisition parameters of the Sentinel-1 data used.",
         media_type="application/json",
         roles=["metadata"]
     ),
-    "intersection-data": AssetDefinition.create(
-        title="Intersection Data",
-        description="This is the JSON output returned for all tiles intersecting with the scene.",
-        media_type="application/json",
+    "dfo-event-footprint": AssetDefinition.create(
+        title="DFO event footprint",
+        description="This is the DFO footprint that was identified as intersecting with the scene.",
+        media_type="application/geo+json",
         roles=["data"]
-    ),
+    )
 }
 
 item_assets_ext = ItemAssetsExtension.ext(gfm_col, add_if_missing=True)
@@ -167,10 +174,11 @@ for dfo_path in dfolist:
             else:
                 orbit_state = 'descending'
         else:
+            print(f"skipping gfm version and orbit direction for {sent_ti_path}")
             orbit_state = None
             gfm_version = None
 
-        abs_orbit_num = extract_orbit_number(sent_ti)
+        abs_orbit_num = extract_orbit_number(sent_ti_path)
         
         # get number of equi7grid tiles
         equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in advflag_list if len(os.path.basename(filename).split('_')) > 2]
@@ -182,6 +190,16 @@ for dfo_path in dfolist:
         event_row = gdf[gdf['dfo_id'] == int(eventid)]
         dfo_start_datetime = pd.to_datetime(event_row['began'].values[0])
         dfo_end_datetime = pd.to_datetime(event_row['ended'].values[0])
+
+        # create flowfile object
+        flowfile_key = bench.list_resources_with_string(bucket_name, sent_ti_path, s3, ['flows'])
+        if flowfile_key:
+            flowfile_df = download_flowfile(bucket_name, flowfile_key[0], s3)
+            flowstats = extract_flowstats(flowfile_df)
+            flowfile_object = create_flowfile_object("NWM_v3_flowfile",flowstats)
+        else:
+            print("no flowfile detected")
+            flowfile_object = None    
 
         # initialize item
         item = pystac.Item(
@@ -200,24 +218,26 @@ for dfo_path in dfolist:
                 "dfo_start_datetime": dfo_start_datetime.isoformat(),
                 "dfo_end_datetime": dfo_end_datetime.isoformat(),
                 "proj:epsg": 27705,
-                "gfm_version": gfm_version
+                "gfm_version": gfm_version,
+                "flowfile": flowfile_object
             }
         )
         # add the sat and projection extension to the item
         sat_ext = SatExtension.ext(item, add_if_missing=True)
         proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
 
-        # add the sentinel 1 metadata file as an asset
-        sent_metadata_list = bench.list_resources_with_string(bucket_name,sent_ti_path, s3, ['metadata'])     
-        item.add_asset(
-            "sentinel 1 metadata",
-            pystac.Asset(
-                href= bench.generate_href(bucket_name,sent_metadata_list[0],s3,link_type),
-                media_type="application/json",
-                roles=["metadata"],
-                description=f"sentinel 1 metadata file for granule: {sent_ti}"
+        # add the flowfile asset
+        if flowfile_key:
+            item.add_asset(
+                "NWM_v3_flowfile",
+                pystac.Asset(
+                    href= bench.generate_href(bucket_name,flowfile_key[0],s3,link_type),
+                    media_type="application/json",
+                    roles=["data"],
+                    description=f"flowfile for granule: {sent_ti}"
+                )
             )
-        )
+       
         # loop through the equi7grid tiles in the sentinel tile and add those assets
         for equi7tile in equi7tiles_list:
             tile_asset_list = bench.list_resources_with_string(bucket_name, sent_ti_path, s3, [equi7tile])

@@ -1,3 +1,5 @@
+import pandas as pd
+import io
 import os
 import json
 from shapely.geometry import shape, MultiPolygon, mapping
@@ -66,6 +68,49 @@ def extract_datetimes(sentinel_string):
     else:
         raise ValueError("No valid datetime strings found in the input data string")
 
+def download_flowfile(bucket_name, flowfile_key, s3_client):
+    response = s3_client.get_object(Bucket=bucket_name, Key=flowfile_key)
+    flowfile_content = response['Body'].read().decode('utf-8')
+    return pd.read_csv(io.StringIO(flowfile_content))
+
+def extract_flowstats(flowfile_df):
+    flowstats = {}
+    for column in flowfile_df.columns:
+        if flowfile_df[column].dtype in ['float64', 'int64']:  # Only consider numeric columns
+            min_value = flowfile_df[column].min()
+            max_value = flowfile_df[column].max()
+            mean_value = flowfile_df[column].mean()
+            flowstats[column] = {
+                'Min': min_value,
+                'Max': max_value,
+                'Mean': mean_value
+            }
+    return flowstats
+
+def create_flowfile_object(flowfile_id, flowstats):
+    flowstats_summaries = {}
+    for column, stats in flowstats.items():
+        flowstats_summaries[column] = {
+            "Min": float(stats['Min']),
+            "Max": float(stats['Max']),
+            "Mean": float(stats['Mean'])
+        }
+        
+    flowfile_object = {
+        "flowfile_asset_summaries": {
+            flowfile_id: {
+                "Flowstats": flowstats_summaries
+            }
+        },
+        "columns": {
+            "Column name": ["feature id", "discharge"],
+            "Column description": ["hydrofabric feature id", "Discharge in m^3/s modeled using retrospective data"],
+            "column data source": ["hydrofabric name and version info", "model/gauge information"]
+        },
+        "hydrofabric_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
+    }
+    return flowfile_object
+
 def extract_orbit_state(filename):
     # Regular expression to match the filename pattern and extract the orbit state (A or D)
     pattern = re.compile(r'.*?_[VH]{2}_([AD]).*')
@@ -101,3 +146,79 @@ def extract_version_string(filepath):
         return version_string
     else:
         raise ValueError("No valid version string found in the input filename")
+
+layers = {
+    "observed_flood_extent": {
+        "label": "Floodwater",
+        "quantity": 1,
+        "color": "#e84c78"
+    },
+    "observed_water_extent": {
+        "label": "Water",
+        "quantity": 1,
+        "color": "#0584AA"
+    },
+    "reference_water_mask": {
+        "labels": [
+            {"label": "No Water", "quantity": 0, "color": "#79de13", "opacity": "0"},
+            {"label": "Permanent Water Body", "quantity": 1, "color": "#004B72"},
+            {"label": "Seasonal Water Body (for the current month)", "quantity": 2, "color": "#457896"}
+        ]
+    },
+    "exclusion_mask": {
+        "label": "Exclusion Mask set",
+        "quantity": 1,
+        "color": "#858686"
+    },
+    "likelihood_values": {
+        "labels": [
+            {"label": "High flood extent confidence", "quantity": 1, "color": "#FEF4F0"},
+            {"label": "25", "quantity": 25, "color": "#F8BEA2"},
+            {"label": "50", "quantity": 50, "color": "#EE7058"},
+            {"label": "75", "quantity": 75, "color": "#DA1F1D"},
+            {"label": "Low flood extent confidence", "quantity": 100, "color": "#6A1417"}
+        ]
+    },
+    "affected_landcover": {
+        "labels": [
+            {"label": "Shrubs", "quantity": 20, "color": "#ffbb22"},
+            {"label": "Herbaceous vegetation", "quantity": 30, "color": "#ffff4c"},
+            {"label": "Cultivated and managed vegetation/agriculture (cropland)", "quantity": 40, "color": "#f096ff"},
+            {"label": "Urban / built up", "quantity": 50, "color": "#fa0000"},
+            {"label": "Bare / sparse vegetation", "quantity": 60, "color": "#b4b4b4"},
+            {"label": "Snow and Ice", "quantity": 70, "color": "#f0f0f0"},
+            {"label": "Herbaceous wetland", "quantity": 90, "color": "#0096a0"},
+            {"label": "Moss and lichen", "quantity": 100, "color": "#fae6a0"},
+            {"label": "Closed forest, evergreen needle leaf", "quantity": 111, "color": "#58481f"},
+            {"label": "Closed forest, evergreen, broad leaf", "quantity": 112, "color": "#009900"},
+            {"label": "Closed forest, deciduous needle leaf", "quantity": 113, "color": "#70663e"},
+            {"label": "Closed forest, deciduous broad leaf", "quantity": 114, "color": "#00cc00"},
+            {"label": "Closed forest, mixed", "quantity": 115, "color": "#4e751f"},
+            {"label": "Closed forest, unknown", "quantity": 116, "color": "#007800"},
+            {"label": "Open forest, evergreen needle leaf", "quantity": 121, "color": "#666000"},
+            {"label": "Open forest, evergreen broad leaf", "quantity": 122, "color": "#8db400"},
+            {"label": "Open forest, deciduous needle leaf", "quantity": 123, "color": "#8d7400"},
+            {"label": "Open forest, deciduous broad leaf", "quantity": 124, "color": "#a0dc00"},
+            {"label": "Open forest, mixed", "quantity": 125, "color": "#929900"},
+            {"label": "Open forest, unknown", "quantity": 126, "color": "#648c00"}
+        ]
+    },
+    "affected_population": {
+        "labels": [
+            {"label": "0.01", "quantity": 0.01, "color": "#F9F5C0"},
+            {"label": "2", "quantity": 2, "color": "#FBC68D"},
+            {"label": "4", "quantity": 4, "color": "#F18B68"},
+            {"label": "8", "quantity": 8, "color": "#E45563"},
+            {"label": "12", "quantity": 12, "color": "#AC347B"},
+            {"label": "20", "quantity": 20, "color": "#6A247A"},
+            {"label": "> 30", "quantity": 30, "color": "#2C255B"}
+        ]
+    },
+    "advisory_flags": {
+        "labels": [
+            {"label": "Low regional backscatter (snow, ice, dryness)", "quantity": 1, "color": "#E94D79"},
+            {"label": "Rough water surface (wind)", "quantity": 2, "color": "#AED07A"},
+            {"label": "Low regional backscatter and rough water surface", "quantity": 3, "color": "#41BEDD"}
+        ]
+    }
+}
