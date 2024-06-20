@@ -7,6 +7,7 @@ from shapely.ops import unary_union
 from fiona.transform import transform_geom
 import re
 from datetime import datetime
+import pystac
 
 def make_item_geom(bucket_name, keys, s3):
     geojson_geometries = []
@@ -88,14 +89,22 @@ def extract_flowstats(flowfile_df):
     return flowstats
 
 def create_flowfile_object(flowfile_id, flowstats):
-    flowstats_summaries = {}
-    for column, stats in flowstats.items():
-        flowstats_summaries[column] = {
-            "Min": float(stats['Min']),
-            "Max": float(stats['Max']),
-            "Mean": float(stats['Mean'])
+    # Assuming the second column is always "discharge"
+    second_column = "discharge"
+
+    # Check if the second column exists in the flowstats
+    if second_column in flowstats:
+        # Compute the flowstats summaries only for the second column
+        flowstats_summaries = {
+            second_column: {
+                "Min": float(flowstats[second_column]['Min']),
+                "Max": float(flowstats[second_column]['Max']),
+                "Mean": float(flowstats[second_column]['Mean'])
+            }
         }
-        
+    else:
+        raise KeyError(f"Column {second_column} not found in flowstats")  
+
     flowfile_object = {
         "flowfile_asset_summaries": {
             flowfile_id: {
@@ -103,12 +112,13 @@ def create_flowfile_object(flowfile_id, flowstats):
             }
         },
         "columns": {
-            "Column name": ["feature id", "discharge"],
-            "Column description": ["hydrofabric feature id", "Discharge in m^3/s modeled using retrospective data"],
-            "column data source": ["hydrofabric name and version info", "model/gauge information"]
+            "Column name": ["feature_id", "discharge"],
+            "Column description": ["feature id that identifies the stream segment being modeled or measured", "Discharge in m^3/s"],
+            "column data source": ["NWM 3.0 hydrofabric", "NWM 3.0 retrospective discharge data"]
         },
-        "hydrofabric_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
-    }
+        "hydrofabric_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz",
+        "discharge_href":"https://registry.opendata.aws/nwm-archive/"
+        }
     return flowfile_object
 
 def extract_orbit_state(filename):
@@ -146,6 +156,45 @@ def extract_version_string(filepath):
         return version_string
     else:
         raise ValueError("No valid version string found in the input filename")
+
+# Helper function to get media type based on file extension
+def get_media_type(file_name):
+    if file_name.endswith(".tif") or file_name.endswith(".tiff"):
+        return pystac.MediaType.GEOTIFF
+    elif file_name.endswith(".geojson"):
+        return pystac.MediaType.GEOJSON
+    elif file_name.endswith(".json"):
+        return pystac.MediaType.JSON
+    elif file_name.endswith(".pdf"):
+        return pystac.MediaType.PDF
+    elif file_name.endswith(".jpeg") or file_name.endswith(".jpg"):
+        return pystac.MediaType.JPEG
+    elif file_name.endswith(".png"):
+        return pystac.MediaType.PNG
+    elif file_name.endswith(".xml"):
+        return pystac.MediaType.XML
+    elif file_name.endswith(".txt"):
+        return pystac.MediaType.TEXT
+    elif file_name.endswith(".hdf"):
+        return pystac.MediaType.HDF
+    elif file_name.endswith(".h5"):
+        return pystac.MediaType.HDF5
+    elif file_name.endswith(".jp2"):
+        return pystac.MediaType.JPEG2000
+    elif file_name.endswith(".kml"):
+        return pystac.MediaType.KML
+    elif file_name.endswith(".fgb"):
+        return pystac.MediaType.FLATGEOBUF
+    elif file_name.endswith(".gpkg"):
+        return pystac.MediaType.GEOPACKAGE
+    elif file_name.endswith(".parquet"):
+        return pystac.MediaType.PARQUET
+    elif file_name.endswith(".zarr"):
+        return pystac.MediaType.ZARR
+    elif file_name.endswith(".html"):
+        return pystac.MediaType.HTML
+    else:
+        return "application/octet-stream"
 
 layers = {
     "observed_flood_extent": {

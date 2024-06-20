@@ -238,17 +238,61 @@ for dfo_path in dfolist:
                 )
             )
        
-        # loop through the equi7grid tiles in the sentinel tile and add those assets
+        # loop through the equi7grid tiles in the sentinel tile and add those assets also create an equi7tile_assets object that can be attached to the items properties
+        equi7tile_assets = {}
         for equi7tile in equi7tiles_list:
             tile_asset_list = bench.list_resources_with_string(bucket_name, sent_ti_path, s3, [equi7tile])
+            equi7tile_assets[equi7tile] = []
+
             for tile_asset_path in tile_asset_list:
                 tile_asset =  tile_asset_path.strip('/').split('/')[-1]  
+
+                # Extract the asset type from the tile_asset name
+                if 'ENSEMBLE_FLOOD' in tile_asset:
+                    asset_type = 'Observed Flood Extent'
+                elif 'ENSEMBLE_OBSWATER' in tile_asset:
+                    asset_type = 'Observed Water Extent'
+                elif 'REFERENCE_WATER_OUT' in tile_asset:
+                    asset_type = 'Reference Water Mask'
+                elif 'ENSEMBLE_EXCLAYER' in tile_asset:
+                    asset_type = 'Exclusion Mask'
+                elif 'ENSEMBLE_UNCERTAINTY' in tile_asset:
+                    asset_type = 'Likelihood Values'
+                elif 'ADVFLAG' in tile_asset:
+                    asset_type = 'Advisory Flags'
+                elif 'schedule' in tile_asset:
+                    asset_type = 'Schedule'
+                elif 'footprint' in tile_asset:
+                    asset_type = 'Footprint'
+                elif 'metadata' in tile_asset:
+                    asset_type = 'Metadata'
+                elif 'POP' in tile_asset:
+                    asset_type = 'Affected population'
+                elif 'CGLS' in tile_asset:
+                    asset_type = 'Affected Landcover'
+                else:
+                    asset_type = 'Unknown'
+
+                if asset_type in ['Footprint','Metadata', 'Schedule']:
+                    role = 'metadata'
+                else:
+                    role = 'data'
+
+                media_type = get_media_type(tile_asset)
+                asset_id = f"{equi7tile}_{asset_type.replace(' ', '_')}"
+                equi7tile_assets[equi7tile].append(asset_id)
+
                 item.add_asset(
-                    tile_asset,
+                    asset_id,
                     pystac.Asset(
-                        href= bench.generate_href(bucket_name,tile_asset_path,s3, link_type)
+                        href=bench.generate_href(bucket_name, tile_asset_path, s3, link_type),
+                        roles=[role],
+                        media_type=media_type,
+                        title=asset_type
                     )
                 )
+
+        item.properties['equi7tile_assets'] = equi7tile_assets
 
         # add item to collection
         gfm_col.add_item(item)
