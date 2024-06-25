@@ -188,8 +188,8 @@ for dfo_path in dfolist:
 
         # Extract dfo_start_datetime and dfo_end_datetime from the GeoDataFrame
         event_row = gdf[gdf['dfo_id'] == int(eventid)]
-        dfo_start_datetime = pd.to_datetime(event_row['began'].values[0])
-        dfo_end_datetime = pd.to_datetime(event_row['ended'].values[0])
+        dfo_start_datetime = pd.to_datetime(event_row['began'].values[0]).replace(tzinfo=timezone.utc)
+        dfo_end_datetime = pd.to_datetime(event_row['ended'].values[0]).replace(tzinfo=timezone.utc)
 
         # create flowfile object
         flowfile_key = bench.list_resources_with_string(bucket_name, sent_ti_path, s3, ['flows'])
@@ -212,11 +212,9 @@ for dfo_path in dfolist:
                 "description": f"This item lists some of assets associated with the GFM scene {sent_ti}. Each asset is associated with an equi7grid tile within the GFM scene.",
                 "sat:orbit_state": orbit_state,
                 "sat:absolute_orbit": abs_orbit_num,
-                "start_datetime": start_datetime.isoformat(),
-                "end_datetime": end_datetime.isoformat(),
                 "dfo_event_id": eventid,
-                "dfo_start_datetime": dfo_start_datetime.isoformat(),
-                "dfo_end_datetime": dfo_end_datetime.isoformat(),
+                "dfo_start_datetime": dfo_start_datetime.replace(tzinfo=timezone.utc).isoformat(),
+                "dfo_end_datetime": dfo_end_datetime.replace(tzinfo=timezone.utc).isoformat(),
                 "proj:epsg": 27705,
                 "gfm_version": gfm_version,
                 "flowfile": flowfile_object

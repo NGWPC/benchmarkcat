@@ -6,7 +6,7 @@ from shapely.geometry import shape, MultiPolygon, mapping
 from shapely.ops import unary_union
 from fiona.transform import transform_geom
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 import pystac
 
 def make_item_geom(bucket_name, keys, s3):
@@ -62,9 +62,8 @@ def extract_datetimes(sentinel_string):
         end_datetime_str = match.group(2)
         
         # Convert to datetime objects
-        start_datetime = datetime.strptime(start_datetime_str, '%Y%m%dT%H%M%S')
-        end_datetime = datetime.strptime(end_datetime_str, '%Y%m%dT%H%M%S')
-        
+        start_datetime = datetime.strptime(start_datetime_str, '%Y%m%dT%H%M%S').replace(tzinfo=timezone.utc)
+        end_datetime = datetime.strptime(end_datetime_str, '%Y%m%dT%H%M%S').replace(tzinfo=timezone.utc)
         return start_datetime, end_datetime
     else:
         raise ValueError("No valid datetime strings found in the input data string")
