@@ -1,2 +1,6 @@
 TestData/
 .venv/
+*egg-info
+__pycache__
+
+.aider*
