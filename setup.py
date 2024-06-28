@@ -12,9 +12,5 @@ setup(
         ],
     },
     setup_requires=['setuptools'],
-    entry_points={
-        'console_scripts': [
-        ],
-    },
 )
 
