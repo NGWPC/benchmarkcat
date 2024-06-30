@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO)
 s3 = boto3.client('s3')
 
 # link type set to 'url' for a signed url and 'uri' for an s3 uri
-link_type = 'uri'
+link_type = 'url'
 
 # Specify bucket parameters
 bucket_name = 'fimc-data'
@@ -158,6 +158,7 @@ for dfo_path in dfolist:
     sent_ti_list = bench.list_subdirectories(bucket_name,dfo_path,s3)
 
     for sent_ti_path in sent_ti_list:
+        thumbnail_created = False
         sent_ti = sent_ti_path.strip('/').split('/')[-1]
         # create geometry
         fp_list = bench.list_resources_with_string(bucket_name,sent_ti_path, s3, ['footprint'])     
@@ -217,7 +218,7 @@ for dfo_path in dfolist:
                 "dfo_end_datetime": dfo_end_datetime.replace(tzinfo=timezone.utc).isoformat(),
                 "proj:epsg": 27705,
                 "gfm_version": gfm_version,
-                "flowfile": flowfile_object
+                "flowfiles": flowfile_object
             }
         )
         # add the sat and projection extension to the item
@@ -289,6 +290,44 @@ for dfo_path in dfolist:
                         title=asset_type
                     )
                 )
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    if not thumbnail_created and asset_type == 'Observed Water Extent':
+                
+                        local_extent_path = os.path.join(tmpdir, f'{equi7tile}_extent.tif')
+
+                        # Download the TIFF files and flow files from S3
+                        try:
+                            s3.download_file(bucket_name, tile_asset_path, local_extent_path)
+                            print(f"Downloaded extent raster to {tmpdir}")
+                        except NoCredentialsError:
+                            print("Credentials not available")
+                            continue
+                        except ClientError as e:
+                            print(f"Failed to download files: {e}")
+                            continue
+
+                        # Create a thumbnail for the first gauge
+                        if not thumbnail_created:
+                            local_thumbnail_path = os.path.join(tmpdir, f'{equi7tile}_extent_thumbnail.png')
+
+                            # Create thumbnail
+                            bench.create_preview(local_extent_path, local_thumbnail_path)                
+                            # Upload thumbnail to S3
+                            thumbnail_s3_key = f'{sent_ti_path}{equi7tile}_extent_thumbnail.png'
+                            s3.upload_file(local_thumbnail_path, bucket_name, thumbnail_s3_key)
+
+                            # add thumbnail to item
+                            item.add_asset(
+                                f"{equi7tile}_thumbnail",
+                                pystac.Asset(
+                                    href= bench.generate_href(bucket_name, thumbnail_s3_key, s3, link_type),
+                                    media_type="image/png",
+                                    roles=["thumbnail"],
+                                    title=f"{equi7tile} thumbnail"
+                                )
+                            )
+                    
+                            thumbnail_created = True
 
         item.properties['equi7tile_assets'] = equi7tile_assets
 

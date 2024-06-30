@@ -94,31 +94,35 @@ def create_flowfile_object(flowfile_id, flowstats):
     # Check if the second column exists in the flowstats
     if second_column in flowstats:
         # Compute the flowstats summaries only for the second column
-        flowstats_summaries = {
-            second_column: {
-                "Min": float(flowstats[second_column]['Min']),
-                "Max": float(flowstats[second_column]['Max']),
-                "Mean": float(flowstats[second_column]['Mean'])
+        flow_summaries = {
+            "Flowstats": {
+                second_column: {
+                    "Min": float(flowstats[second_column]['Min']),
+                    "Max": float(flowstats[second_column]['Max']),
+                    "Mean": float(flowstats[second_column]['Mean'])
+                }
+            },
+            "columns": {
+                "feature_id": {
+                    "Column description": "feature id that identifies the stream segment being modeled or measured",
+                    "Column data source": "NWM 3.0 hydrofabric",
+                    "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
+                },
+                "discharge": {
+                    "Column description": "Discharge in m^3/s",
+                    "Column data source": "NWM 3.0 retrospective discharge data",
+                    "data_href": "https://registry.opendata.aws/nwm-archive/"
+                }
             }
         }
-    else:
-        raise KeyError(f"Column {second_column} not found in flowstats")  
 
-    flowfile_object = {
-        "flowfile_asset_summaries": {
-            flowfile_id: {
-                "Flowstats": flowstats_summaries
-            }
-        },
-        "columns": {
-            "Column name": ["feature_id", "discharge"],
-            "Column description": ["feature id that identifies the stream segment being modeled or measured", "Discharge in m^3/s"],
-            "column data source": ["NWM 3.0 hydrofabric", "NWM 3.0 retrospective discharge data"]
-        },
-        "hydrofabric_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz",
-        "discharge_href":"https://registry.opendata.aws/nwm-archive/"
+        flowfile_object = {
+                flowfile_id: flow_summaries
         }
-    return flowfile_object
+
+        return flowfile_object
+    else:
+        raise KeyError(f"Column {second_column} not found in flowstats")
 
 def extract_orbit_state(filename):
     # Regular expression to match the filename pattern and extract the orbit state (A or D)
