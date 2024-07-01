@@ -1,10 +1,7 @@
-import pandas as pd
-import io
 import os
 import json
-from shapely.geometry import shape, MultiPolygon, mapping
-from shapely.ops import unary_union, transform
-from fiona.transform import transform_geom
+from shapely.geometry import shape, MultiPolygon, Polygon, mapping
+from shapely.ops import transform
 import re
 from datetime import datetime, timezone
 import pystac
@@ -40,8 +37,18 @@ def make_item_geom(bucket_name, keys, gdf, dfo_id, s3):
             transformed_geom = transform(transformer.transform, shapely_geom)
             geojson_geometries.append(transformed_geom)
 
+    # Flatten the list of geometries
+    flattened_geometries = []
+    for geom in geojson_geometries:
+        if isinstance(geom, Polygon):
+            flattened_geometries.append(geom)
+        elif isinstance(geom, MultiPolygon):
+            flattened_geometries.extend([poly for poly in geom.geoms])
+        else:
+            raise ValueError(f"Unsupported geometry type: {type(geom)}")
+
     # Combine all geometries into a single MultiPolygon
-    combined_geometry = MultiPolygon(geojson_geometries)
+    combined_geometry = MultiPolygon(flattened_geometries)
 
     # Calculate the combined bbox
     bbox = combined_geometry.bounds

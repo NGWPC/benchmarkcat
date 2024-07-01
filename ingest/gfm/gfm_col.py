@@ -26,7 +26,7 @@ s3 = boto3.client('s3')
 parser = argparse.ArgumentParser()
 
 # Add arguments
-parser.add_argument('--link_type', type=str, default='url', help='Link type, either "url" or "uri"')
+parser.add_argument('--link_type', type=str, default='uri', help='Link type, either "url" or "uri"')
 parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
 parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
 parser.add_argument('--asset_object_key', type=str, default='benchmark/rs/', help='Key for the asset object in the S3 bucket')
@@ -88,7 +88,7 @@ gdf = gpd.read_file(tmp_geo_package)
 # Get the list of DFO events
 dfolist = bench.list_subdirectories(bucket_name, f"{asset_object_key}gfm/", s3)
 
-for dfo_path in dfolist[0:1]:
+for dfo_path in dfolist:
     # pull out the event footprint so can attach to item's feature as one of the polygons
     eventid = dfo_path.strip('/').split('/')[-1]
     print(f"indexing DFO event: {eventid}")
@@ -153,8 +153,8 @@ for dfo_path in dfolist[0:1]:
                 "description": f"This item lists some of assets associated with the GFM scene {sent_ti}. Each asset is associated with an equi7grid tile within the GFM scene.",
                 "sat:orbit_state": orbit_state,
                 "sat:absolute_orbit": abs_orbit_num,
-                "gfm_data_take_start_datetime":start_datetime,  
-                "gfm_data_take_end_datetime":end_datetime,
+                "gfm_data_take_start_datetime":start_datetime.isoformat(),  
+                "gfm_data_take_end_datetime":end_datetime.isoformat(),
                 "dfo_event_id": eventid,
                 "dfo_start_datetime": dfo_start_datetime.replace(tzinfo=timezone.utc).isoformat(),
                 "dfo_end_datetime": dfo_end_datetime.replace(tzinfo=timezone.utc).isoformat(),
