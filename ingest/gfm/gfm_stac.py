@@ -105,6 +105,7 @@ def extract_version_string(filepath):
     else:
         raise ValueError("No valid version string found in the input filename")
 
+####### Encoded data specific to the gfm collection #######
 # helper function to get media type based on the file name of the asset
 def determine_asset_type(tile_asset):
     """

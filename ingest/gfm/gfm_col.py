@@ -1,8 +1,8 @@
+import argparse
 import geopandas as gpd
 import pdb
 import pandas as pd
 import boto3
-import re
 import os
 import tempfile
 import logging
@@ -23,13 +23,20 @@ logging.basicConfig(level=logging.INFO)
 # Create an S3 client
 s3 = boto3.client('s3')
 
-# link type set to 'url' for a signed url and 'uri' for an s3 uri
-link_type = 'url'
+parser = argparse.ArgumentParser()
 
-# Specify bucket parameters
-bucket_name = 'fimc-data'
-catalog_path = 'benchmark/stac-bench-cat/'
-asset_object_key = 'benchmark/rs/'
+# Add arguments
+parser.add_argument('--link_type', type=str, default='url', help='Link type, either "url" or "uri"')
+parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
+parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
+parser.add_argument('--asset_object_key', type=str, default='benchmark/rs/', help='Key for the asset object in the S3 bucket')
+
+args = parser.parse_args()
+
+link_type = args.link_type
+bucket_name = args.bucket_name
+catalog_path = args.catalog_path
+asset_object_key = args.asset_object_key
 
 # Define the collection
 gfm_col = pystac.Collection(
