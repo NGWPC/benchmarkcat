@@ -14,7 +14,7 @@ from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.summaries import Summaries
 from botocore.exceptions import NoCredentialsError, ClientError
 
-from gfm_stac import *
+from ingest.gfm.gfm_stac import *
 from ingest import bench
 
 # Set logging level for boto3
@@ -88,7 +88,8 @@ gdf = gpd.read_file(tmp_geo_package)
 # Get the list of DFO events
 dfolist = bench.list_subdirectories(bucket_name, f"{asset_object_key}gfm/", s3)
 
-for dfo_path in dfolist:
+for dfo_path in dfolist[0:1]:
+    # pull out the event footprint so can attach to item's feature as one of the polygons
     eventid = dfo_path.strip('/').split('/')[-1]
     print(f"indexing DFO event: {eventid}")
     # get list of sentinel 1 tiles
@@ -99,7 +100,7 @@ for dfo_path in dfolist:
         sent_ti = sent_ti_path.strip('/').split('/')[-1]
         # create geometry
         fp_list = bench.list_resources_with_string(bucket_name,sent_ti_path, s3, ['footprint'])     
-        geometry, bbox = make_item_geom(bucket_name, fp_list, s3)  
+        geometry, bbox = make_item_geom(bucket_name, fp_list, gdf, int(eventid),s3)  
 
         # get orbit info and gfm version  
         advflag_list = bench.list_resources_with_string(bucket_name,sent_ti_path, s3, ['ADVFLAG'])     
@@ -135,18 +136,7 @@ for dfo_path in dfolist:
             flowfile_df = bench.download_flowfile(bucket_name, flowfile_key[0], s3)
             flowstats = bench.extract_flowstats(flowfile_df)
             flowfile_ids = ["NWM_v3_flowfile"]
-            columns_list = [{
-                "feature_id": {
-                    "Column description": "feature id that identifies the stream segment being modeled or measured",
-                    "Column data source": "NWM 3.0 hydrofabric",
-                    "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
-                },
-                "discharge": {
-                    "Column description": "Discharge in m^3/s",
-                    "Column data source": "NWM 3.0 retrospective discharge data",
-                    "data_href": "https://registry.opendata.aws/nwm-archive/"
-                }
-            }]
+            # columns_list in gfm_stac.py
             flowfile_object = bench.create_flowfile_object(flowfile_ids,flowstats, columns_list)
         else:
             print("no flowfile detected")
@@ -163,10 +153,14 @@ for dfo_path in dfolist:
                 "description": f"This item lists some of assets associated with the GFM scene {sent_ti}. Each asset is associated with an equi7grid tile within the GFM scene.",
                 "sat:orbit_state": orbit_state,
                 "sat:absolute_orbit": abs_orbit_num,
+                "gfm_data_take_start_datetime":start_datetime,  
+                "gfm_data_take_end_datetime":end_datetime,
                 "dfo_event_id": eventid,
                 "dfo_start_datetime": dfo_start_datetime.replace(tzinfo=timezone.utc).isoformat(),
                 "dfo_end_datetime": dfo_end_datetime.replace(tzinfo=timezone.utc).isoformat(),
                 "proj:epsg": 27705,
+                "proj:wkt2":'+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',	
+                "gsd":20,
                 "gfm_version": gfm_version,
                 "flowfiles": flowfile_object
             }
@@ -218,42 +212,23 @@ for dfo_path in dfolist:
                 )
                 with tempfile.TemporaryDirectory() as tmpdir:
                     if not thumbnail_created and asset_type == 'Observed Water Extent':
-                
                         local_extent_path = os.path.join(tmpdir, f'{equi7tile}_extent.tif')
+                        local_thumbnail_path = os.path.join(tmpdir, f'{equi7tile}_extent_thumbnail.png')
+                        thumbnail_s3_key = f'{sent_ti_path}{equi7tile}_extent_thumbnail.png'
+                        bench.make_and_upload_thumbnail(local_extent_path,local_thumbnail_path,bucket_name,thumbnail_s3_key,s3)
 
-                        # Download the TIFF files and flow files from S3
-                        try:
-                            s3.download_file(bucket_name, tile_asset_path, local_extent_path)
-                            print(f"Downloaded extent raster to {tmpdir}")
-                        except NoCredentialsError:
-                            print("Credentials not available")
-                            continue
-                        except ClientError as e:
-                            print(f"Failed to download files: {e}")
-                            continue
-
-                        # Create a thumbnail for the first gauge
-                        if not thumbnail_created:
-                            local_thumbnail_path = os.path.join(tmpdir, f'{equi7tile}_extent_thumbnail.png')
-
-                            # Create thumbnail
-                            bench.create_preview(local_extent_path, local_thumbnail_path)                
-                            # Upload thumbnail to S3
-                            thumbnail_s3_key = f'{sent_ti_path}{equi7tile}_extent_thumbnail.png'
-                            s3.upload_file(local_thumbnail_path, bucket_name, thumbnail_s3_key)
-
-                            # add thumbnail to item
-                            item.add_asset(
-                                f"{equi7tile}_thumbnail",
-                                pystac.Asset(
-                                    href= bench.generate_href(bucket_name, thumbnail_s3_key, s3, link_type),
-                                    media_type="image/png",
-                                    roles=["thumbnail"],
-                                    title=f"{equi7tile} thumbnail"
-                                )
+                        # add thumbnail to item
+                        item.add_asset(
+                            f"{equi7tile}_thumbnail",
+                            pystac.Asset(
+                                href= bench.generate_href(bucket_name, thumbnail_s3_key, s3, link_type),
+                                media_type="image/png",
+                                roles=["thumbnail"],
+                                title=f"{equi7tile} thumbnail"
                             )
-                    
-                            thumbnail_created = True
+                        )
+                
+                        thumbnail_created = True
 
         item.properties['equi7tile_assets'] = equi7tile_assets
 

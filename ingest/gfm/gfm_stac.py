@@ -3,55 +3,54 @@ import io
 import os
 import json
 from shapely.geometry import shape, MultiPolygon, mapping
-from shapely.ops import unary_union
+from shapely.ops import unary_union, transform
 from fiona.transform import transform_geom
 import re
 from datetime import datetime, timezone
 import pystac
 from pystac.extensions.item_assets import AssetDefinition
+from pyproj import Transformer
 
-def make_item_geom(bucket_name, keys, s3):
+def make_item_geom(bucket_name, keys, gdf, dfo_id, s3):
     geojson_geometries = []
+
+    # Select the geometry from the GeoDataFrame based on dfo_id
+    gdf_geom = gdf[gdf['dfo_id'] == dfo_id].geometry.values[0]
+    geojson_geometries.append(gdf_geom)
+
+    # Initialize the transformer for coordinate transformation
+    transformer = Transformer.from_crs('EPSG:4326', 'EPSG:4326', always_xy=True)
 
     for key in keys:
         response = s3.get_object(Bucket=bucket_name, Key=key)
         geojson_content = response['Body'].read().decode('utf-8')
         geojson_dict = json.loads(geojson_content)
 
-         # Check if the GeoJSON is a FeatureCollection or a single Feature
+        # Check if the GeoJSON is a FeatureCollection or a single Feature
         if geojson_dict['type'] == 'FeatureCollection':
             features = geojson_dict['features']
         elif geojson_dict['type'] == 'Feature':
             features = [geojson_dict]
         else:
             raise ValueError(f"Unsupported GeoJSON type: {geojson_dict['type']}")
-               
+
         for feature in features:
             geom = feature['geometry']
-            transformed_geom = transform_geom('EPSG:4326', 'EPSG:4326', geom)  # Assuming GeoJSON is in EPSG:4326
-            shapely_geom = shape(transformed_geom)
-            geojson_geometries.append(shapely_geom)
-    
-    # Combine all geometries into a single MultiPolygon
-    combined_geometry = unary_union(geojson_geometries)
+            shapely_geom = shape(geom)
+            transformed_geom = transform(transformer.transform, shapely_geom)
+            geojson_geometries.append(transformed_geom)
 
-    if not isinstance(combined_geometry, MultiPolygon):
-        combined_geometry = MultiPolygon([combined_geometry])
-    
+    # Combine all geometries into a single MultiPolygon
+    combined_geometry = MultiPolygon(geojson_geometries)
+
     # Calculate the combined bbox
     bbox = combined_geometry.bounds
     combined_bbox = [bbox[0], bbox[1], bbox[2], bbox[3]]
-    
+
     # Ensure the output is JSON-serializable
     geojson_geometry = json.loads(json.dumps(mapping(combined_geometry)))
-    
-    return geojson_geometry, combined_bbox
 
-# Example usage:
-# s3 = boto3.client('s3')
-# bucket_name = 'my-bucket'
-# geojson_keys = ['path/to/footprint1.geojson', 'path/to/footprint2.geojson', ...]
-# geojson_geometry, combined_bbox = download_geojson_files(bucket_name, geojson_keys, s3)
+    return geojson_geometry, combined_bbox
 
 def extract_datetimes(sentinel_string):
     # Regular expression to extract datetime strings
@@ -104,9 +103,22 @@ def extract_version_string(filepath):
         return version_string
     else:
         raise ValueError("No valid version string found in the input filename")
-
+  
 ####### Encoded data specific to the gfm collection #######
 # helper function to get media type based on the file name of the asset
+columns_list = [{
+                "feature_id": {
+                    "Column description": "feature id that identifies the stream segment being modeled or measured",
+                    "Column data source": "NWM 3.0 hydrofabric",
+                    "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
+                },
+                "discharge": {
+                    "Column description": "Discharge in m^3/s",
+                    "Column data source": "NWM 3.0 retrospective discharge data",
+                    "data_href": "https://registry.opendata.aws/nwm-archive/"
+                }
+            }]
+
 def determine_asset_type(tile_asset):
     """
     Determine the asset type based on the tile asset name.

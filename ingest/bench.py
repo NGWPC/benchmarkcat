@@ -10,6 +10,7 @@ import rioxarray
 import rasterio
 import numpy as np
 from PIL import Image
+from botocore.exceptions import NoCredentialsError, ClientError
 
 def create_preview(raster, preview_path, size=(256, 256)):
     with rasterio.open(raster) as src:
@@ -55,6 +56,40 @@ def create_preview(raster, preview_path, size=(256, 256)):
 
         # Save the preview
         preview.save(preview_path, format="PNG")
+# In bench.py
+
+def make_and_upload_thumbnail(local_asset_path,local_thumbnail_path, bucket_name, s3_path, s3_client):
+    """
+    Downloads a file from S3, creates a thumbnail, and uploads the thumbnail to S3.
+    
+    Args:
+        local_asset_path (str): Local path where the asset will be downloaded.
+        bucket_name (str): Name of the S3 bucket.
+        s3_path (str): S3 path of the asset to be downloaded.
+        local_thumbnail_path (str): Local path where the thumbnail will be saved.
+        s3_client (boto3.client): S3 client.
+        
+    Returns:
+        str: S3 path of the uploaded thumbnail.
+    """
+    try:
+        # Download the file from S3
+        s3_client.download_file(bucket_name, s3_path, local_asset_path)
+        print(f"Downloaded extent raster to {local_asset_path}")
+
+        # Create thumbnail
+        create_preview(local_asset_path, local_thumbnail_path)
+
+        # Upload thumbnail to S3
+        s3_client.upload_file(local_thumbnail_path, bucket_name, s3_path)
+        print(f"Uploaded thumbnail to s3://{bucket_name}/{s3_path}")
+
+    except NoCredentialsError:
+        print("Credentials not available")
+        return None
+    except ClientError as e:
+        print(f"Failed to download or upload files: {e}")
+        return None
 
 def count_pixels(raster_path, values=None):
     """Function to count pixels in a raster matching specific values.
