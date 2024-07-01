@@ -1,3 +1,4 @@
+import pandas as pd
 import boto3
 import io
 import json
@@ -241,6 +242,76 @@ def generate_href(bucket_name, path, s3_client, link_type, expiration=7*24*60*60
             raise ValueError("link_type must be either 'url' or 'uri'")
     except NoCredentialsError:
         return "Credentials not available"
+
+# flowfile functions
+def download_flowfile(bucket_name, flowfile_key, s3_client):
+    response = s3_client.get_object(Bucket=bucket_name, Key=flowfile_key)
+    flowfile_content = response['Body'].read().decode('utf-8')
+    return pd.read_csv(io.StringIO(flowfile_content))
+
+def extract_flowstats(flowfile_df):
+    flowstats = {}
+    for column in flowfile_df.columns:
+        if flowfile_df[column].dtype in ['float64', 'int64']:  # Only consider numeric columns
+            min_value = flowfile_df[column].min()
+            max_value = flowfile_df[column].max()
+            mean_value = flowfile_df[column].mean()
+            flowstats[column] = {
+                'Min': min_value,
+                'Max': max_value,
+                'Mean': mean_value
+            }
+    return flowstats
+
+def create_flowfile_object(flowfile_ids, flowstats, columns_list):
+    """
+    Create a flowfile object with given flowfile IDs, flowstats, and columns.
+
+    Args:
+        flowfile_ids (list): List of flowfile IDs.
+        flowstats (dict): Dictionary containing flow statistics for each column.
+        columns_list (list): List of dictionaries, where each dictionary contains column descriptions 
+                             for the corresponding flowfile ID.
+
+    Returns:
+        dict: A dictionary representing the flowfile object.
+
+    Raises:
+        KeyError: If the second column ('discharge') is not found in flowstats.
+    """
+    # Assuming the second column is always "discharge"
+    second_column = "discharge"
+
+    # Check if the second column exists in the flowstats
+    if second_column in flowstats:
+        flow_summaries = {
+            "Flowstats": {
+                second_column: {
+                    "Min": float(flowstats[second_column]['Min']),
+                    "Max": float(flowstats[second_column]['Max']),
+                    "Mean": float(flowstats[second_column]['Mean'])
+                }
+            }
+        }
+
+        flowfile_object = {}
+
+        for i, flowfile_id in enumerate(flowfile_ids):
+            # Ensure columns_list has enough dictionaries for each flowfile_id
+            if i < len(columns_list):
+                columns = columns_list[i]
+            else:
+                raise IndexError("Not enough column dictionaries provided for the flowfile IDs.")
+
+            flowfile_object[flowfile_id] = {
+                **flow_summaries,
+                "columns": columns
+            }
+
+        return flowfile_object
+    else:
+        raise KeyError(f"Column {second_column} not found in flowstats")
+
 
 # test usage
 if __name__ == "__main__":

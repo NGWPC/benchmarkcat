@@ -68,62 +68,6 @@ def extract_datetimes(sentinel_string):
     else:
         raise ValueError("No valid datetime strings found in the input data string")
 
-def download_flowfile(bucket_name, flowfile_key, s3_client):
-    response = s3_client.get_object(Bucket=bucket_name, Key=flowfile_key)
-    flowfile_content = response['Body'].read().decode('utf-8')
-    return pd.read_csv(io.StringIO(flowfile_content))
-
-def extract_flowstats(flowfile_df):
-    flowstats = {}
-    for column in flowfile_df.columns:
-        if flowfile_df[column].dtype in ['float64', 'int64']:  # Only consider numeric columns
-            min_value = flowfile_df[column].min()
-            max_value = flowfile_df[column].max()
-            mean_value = flowfile_df[column].mean()
-            flowstats[column] = {
-                'Min': min_value,
-                'Max': max_value,
-                'Mean': mean_value
-            }
-    return flowstats
-
-def create_flowfile_object(flowfile_id, flowstats):
-    # Assuming the second column is always "discharge"
-    second_column = "discharge"
-
-    # Check if the second column exists in the flowstats
-    if second_column in flowstats:
-        # Compute the flowstats summaries only for the second column
-        flow_summaries = {
-            "Flowstats": {
-                second_column: {
-                    "Min": float(flowstats[second_column]['Min']),
-                    "Max": float(flowstats[second_column]['Max']),
-                    "Mean": float(flowstats[second_column]['Mean'])
-                }
-            },
-            "columns": {
-                "feature_id": {
-                    "Column description": "feature id that identifies the stream segment being modeled or measured",
-                    "Column data source": "NWM 3.0 hydrofabric",
-                    "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
-                },
-                "discharge": {
-                    "Column description": "Discharge in m^3/s",
-                    "Column data source": "NWM 3.0 retrospective discharge data",
-                    "data_href": "https://registry.opendata.aws/nwm-archive/"
-                }
-            }
-        }
-
-        flowfile_object = {
-                flowfile_id: flow_summaries
-        }
-
-        return flowfile_object
-    else:
-        raise KeyError(f"Column {second_column} not found in flowstats")
-
 def extract_orbit_state(filename):
     # Regular expression to match the filename pattern and extract the orbit state (A or D)
     pattern = re.compile(r'.*?_[VH]{2}_([AD]).*')

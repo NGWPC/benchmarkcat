@@ -195,9 +195,22 @@ for dfo_path in dfolist:
         # create flowfile object
         flowfile_key = bench.list_resources_with_string(bucket_name, sent_ti_path, s3, ['flows'])
         if flowfile_key:
-            flowfile_df = download_flowfile(bucket_name, flowfile_key[0], s3)
-            flowstats = extract_flowstats(flowfile_df)
-            flowfile_object = create_flowfile_object("NWM_v3_flowfile",flowstats)
+            flowfile_df = bench.download_flowfile(bucket_name, flowfile_key[0], s3)
+            flowstats = bench.extract_flowstats(flowfile_df)
+            flowfile_ids = ["NWM_v3_flowfile"]
+            columns_list = [{
+                "feature_id": {
+                    "Column description": "feature id that identifies the stream segment being modeled or measured",
+                    "Column data source": "NWM 3.0 hydrofabric",
+                    "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
+                },
+                "discharge": {
+                    "Column description": "Discharge in m^3/s",
+                    "Column data source": "NWM 3.0 retrospective discharge data",
+                    "data_href": "https://registry.opendata.aws/nwm-archive/"
+                }
+            }]
+            flowfile_object = bench.create_flowfile_object(flowfile_ids,flowstats, columns_list)
         else:
             print("no flowfile detected")
             flowfile_object = None    
