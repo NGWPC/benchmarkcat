@@ -8,6 +8,7 @@ from fiona.transform import transform_geom
 import re
 from datetime import datetime, timezone
 import pystac
+from pystac.extensions.item_assets import AssetDefinition
 
 def make_item_geom(bucket_name, keys, s3):
     geojson_geometries = []
@@ -104,6 +105,42 @@ def extract_version_string(filepath):
     else:
         raise ValueError("No valid version string found in the input filename")
 
+# helper function to get media type based on the file name of the asset
+def determine_asset_type(tile_asset):
+    """
+    Determine the asset type based on the tile asset name.
+
+    Args:
+        tile_asset (str): The name of the tile asset.
+
+    Returns:
+        str: The asset type.
+    """
+    if 'ENSEMBLE_FLOOD' in tile_asset:
+        return 'Observed Flood Extent'
+    elif 'ENSEMBLE_OBSWATER' in tile_asset:
+        return 'Observed Water Extent'
+    elif 'REFERENCE_WATER_OUT' in tile_asset:
+        return 'Reference Water Mask'
+    elif 'ENSEMBLE_EXCLAYER' in tile_asset:
+        return 'Exclusion Mask'
+    elif 'ENSEMBLE_UNCERTAINTY' in tile_asset:
+        return 'Likelihood Values'
+    elif 'ADVFLAG' in tile_asset:
+        return 'Advisory Flags'
+    elif 'schedule' in tile_asset:
+        return 'Schedule'
+    elif 'footprint' in tile_asset:
+        return 'Footprint'
+    elif 'metadata' in tile_asset:
+        return 'Metadata'
+    elif 'POP' in tile_asset:
+        return 'Affected population'
+    elif 'CGLS' in tile_asset:
+        return 'Affected Landcover'
+    else:
+        return 'Unknown'
+
 # Helper function to get media type based on file extension
 def get_media_type(file_name):
     if file_name.endswith(".tif") or file_name.endswith(".tiff"):
@@ -142,6 +179,76 @@ def get_media_type(file_name):
         return pystac.MediaType.HTML
     else:
         return "application/octet-stream"
+
+# Add list of item assets
+assets = {
+    "thumbnail": AssetDefinition.create(
+        title="Observed flood extent thumbnail",
+        description="A black and white thumbnail showing the observed water in the Sentinel-1 tile.",
+        media_type="image/png",
+        roles=["thumbnail"]
+    ),
+    "observed-flood-extent": AssetDefinition.create(
+        title="Observed flood extent",
+        description="Observed water extent mask. Includes negative for areas observed as non-flooded in the Sentinel-1 image. Three layers (or three bands) of JS SQL backscatter intensity.",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "observed-water-extent": AssetDefinition.create(
+        title="Observed water extent",
+        description="Open water extent mask for areas of regular or non-flooded open water. Does not assess reference mask.",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "reference-water-mask": AssetDefinition.create(
+        title="Reference water mask",
+        description="Reference water mask of non-flooded open water. Includes negative for areas observed as non-water. Three bands (for each of three Sentinel-1 observations serving as a reference derived from the water.",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "exclusion-mask": AssetDefinition.create(
+        title="Exclusion mask",
+        description="Areas where JS-SQL flood classification can be masked (e.g., river channels).",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "likelihood-values": AssetDefinition.create(
+        title="Likelihood values",
+        description="Estimated likelihood of flood classification, for all areas outside the exclusion mask.",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "affected-landcover": AssetDefinition.create(
+        title="Affected landcover",
+        description="Land cover / use (e.g. artificial surfaces, agricultural areas) in flooded areas, mapped by a spatial overlay of observed flood extent and the Copernicus GLS land cover.",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "affected-population": AssetDefinition.create(
+        title="Affected population",
+        description="Number of people in flooded areas, mapped by a spatial overlay of observed flood extent and gridded population, from the Copernicus GHSL project.",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "advisory-flags": AssetDefinition.create(
+        title="Advisory flags",
+        description="Flags indicating potential reduced quality of flood mapping, due to prevailing environmental conditions (e.g. wind, ice, snow, dry soil), or degraded input data quality due to signal interference from other SAR missions.",
+        media_type="image/tiff; application=geotiff",
+        roles=["data"]
+    ),
+    "sentinel-1-metadata": AssetDefinition.create(
+        title="Sentinel-1 metadata",
+        description="Information on the acquisition parameters of the Sentinel-1 data used.",
+        media_type="application/json",
+        roles=["metadata"]
+    ),
+    "dfo-event-footprint": AssetDefinition.create(
+        title="DFO event footprint",
+        description="This is the DFO footprint that was identified as intersecting with the scene.",
+        media_type="application/geo+json",
+        roles=["data"]
+    )
+}
 
 layers = {
     "observed_flood_extent": {

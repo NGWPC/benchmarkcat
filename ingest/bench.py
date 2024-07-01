@@ -1,3 +1,4 @@
+import tempfile
 import pandas as pd
 import boto3
 import io
@@ -168,6 +169,7 @@ def list_resources_with_string(bucket, prefix, client, keywords,delimiter=None):
     
     return list_s3_objects(bucket, prefix, client, filter_func, process_func, delimiter=delimiter)
 
+
 def download_catalog_and_collections(catalog_key, s3, bucket_name, tmp_dir):
     """Download a catalog and all its top-level collections."""
     # Download the catalog
@@ -213,6 +215,42 @@ def upload_directory_to_s3(directory_path, bucket_name, destination_path,client)
                 print(f"Uploaded {file_path} to s3://{bucket_name}/{s3_key}")
             except (NoCredentialsError, ClientError) as e:
                 print(f"Failed to upload {file_path} to s3://{bucket_name}/{s3_key}: {e}")
+
+def update_collection(collection, catalog_id, catalog_path, s3, bucket_name):
+    """
+    Update the given collection in the catalog and upload it to S3.
+
+    Args:
+        collection (pystac.Collection): The collection object to be added or updated.
+        catalog_id (str): The ID of the collection to be updated or added.
+        catalog_path (str): The S3 path to the catalog. Needs to end in a "/"
+        s3 (boto3.client): The S3 client.
+        bucket_name (str): The S3 bucket name.
+        bench (object): The object containing download_catalog_and_collections and upload_directory_to_s3 methods.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Download the catalog and all child collections to the temporary directory
+        catalog_key = f'{catalog_path}catalog.json'
+        catalog, catalog_local_path = download_catalog_and_collections(catalog_key, s3, bucket_name, temp_dir)
+
+        # Set root and self href for the catalog so can add/update the collection
+        catalog.set_root(catalog)
+        catalog.set_self_href(catalog_local_path)
+
+        # Remove child in case collection being updated
+        try:
+            catalog.remove_child(catalog_id)
+        except KeyError:
+            pass
+
+        # Add collection to catalog
+        catalog.add_child(collection)
+
+        # Resave the catalog to the temporary directory after adding in the collection
+        catalog.normalize_and_save(root_href=temp_dir, catalog_type=pystac.CatalogType.SELF_CONTAINED, skip_unresolved=True)    
+
+        # Upload the contents of the temporary directory to S3
+        upload_directory_to_s3(temp_dir, bucket_name, catalog_path, s3)
 
 def generate_href(bucket_name, path, s3_client, link_type, expiration=7*24*60*60):
     """

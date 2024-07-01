@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import pystac
 from pystac.extensions.sat import SatExtension
 from pystac.extensions.projection import ProjectionExtension
-from pystac.extensions.item_assets import ItemAssetsExtension, AssetDefinition
+from pystac.extensions.item_assets import ItemAssetsExtension 
 from pystac.summaries import Summaries
 from botocore.exceptions import NoCredentialsError, ClientError
 
@@ -36,7 +36,7 @@ gfm_col = pystac.Collection(
     id='gfm-collection',
     description="This collection contains the 50+ Global Flood Monitoring (GFM) flood tile groups identified by using the Dartmouth Flood Observatory (DFO) event data. The events are a subset of the 900+ DFO events selected based on size, time frame (2015-present), and overlap with GFM scenes in the United States.",
     title="Global Flood Monitoring Collection",
-    keywords=["flood", "GFM", "DFO", "NWS"],
+    keywords=["flood", "GFM", "DFO"],
     extent=pystac.Extent(
         spatial=pystac.SpatialExtent([[-179.9, 7.2, -64.5, 61.8]]),
         temporal=pystac.TemporalExtent([[datetime(2015, 1, 1, tzinfo=timezone.utc), None]])
@@ -65,76 +65,6 @@ gfm_col.assets['naming_conventions'] = pystac.Asset(
     description="This document contains the naming conventions for the GFM data as well as information on the output layers for each tile",
     media_type="application/pdf"
 )
-
-# Add list of item assets
-assets = {
-    "thumbnail": AssetDefinition.create(
-        title="Observed flood extent thumbnail",
-        description="A black and white thumbnail showing the observed water in the Sentinel-1 tile.",
-        media_type="image/png",
-        roles=["thumbnail"]
-    ),
-    "observed-flood-extent": AssetDefinition.create(
-        title="Observed flood extent",
-        description="Observed water extent mask. Includes negative for areas observed as non-flooded in the Sentinel-1 image. Three layers (or three bands) of JS SQL backscatter intensity.",
-        media_type="image/tiff; application=geotiff",
-        roles=["data"]
-    ),
-    "observed-water-extent": AssetDefinition.create(
-        title="Observed water extent",
-        description="Open water extent mask for areas of regular or non-flooded open water. Does not assess reference mask.",
-        media_type="image/tiff; application=geotiff",
-        roles=["data"]
-    ),
-    "reference-water-mask": AssetDefinition.create(
-        title="Reference water mask",
-        description="Reference water mask of non-flooded open water. Includes negative for areas observed as non-water. Three bands (for each of three Sentinel-1 observations serving as a reference derived from the water.",
-        media_type="image/tiff; application=geotiff",
-        roles=["data"]
-    ),
-    "exclusion-mask": AssetDefinition.create(
-        title="Exclusion mask",
-        description="Areas where JS-SQL flood classification can be masked (e.g., river channels).",
-        media_type="image/tiff; application=geotiff",
-        roles=["data"]
-    ),
-    "likelihood-values": AssetDefinition.create(
-        title="Likelihood values",
-        description="Estimated likelihood of flood classification, for all areas outside the exclusion mask.",
-        media_type="image/tiff; application=geotiff",
-        roles=["data"]
-    ),
-    "affected-landcover": AssetDefinition.create(
-        title="Affected landcover",
-        description="Land cover / use (e.g. artificial surfaces, agricultural areas) in flooded areas, mapped by a spatial overlay of observed flood extent and the Copernicus GLS land cover.",
-        media_type="image/tiff; application=geotiff",
-        roles=["data"]
-    ),
-    "affected-population": AssetDefinition.create(
-        title="Affected population",
-        description="Number of people in flooded areas, mapped by a spatial overlay of observed flood extent and gridded population, from the Copernicus GHSL project.",
-        media_type="image/tiff; application=geotiff",
-        roles=["data"]
-    ),
-    "advisory-flags": AssetDefinition.create(
-        title="Advisory flags",
-        description="Flags indicating potential reduced quality of flood mapping, due to prevailing environmental conditions (e.g. wind, ice, snow, dry soil), or degraded input data quality due to signal interference from other SAR missions.",
-        media_type="image/tiff; application=geotiff",
-        roles=["data"]
-    ),
-    "sentinel-1-metadata": AssetDefinition.create(
-        title="Sentinel-1 metadata",
-        description="Information on the acquisition parameters of the Sentinel-1 data used.",
-        media_type="application/json",
-        roles=["metadata"]
-    ),
-    "dfo-event-footprint": AssetDefinition.create(
-        title="DFO event footprint",
-        description="This is the DFO footprint that was identified as intersecting with the scene.",
-        media_type="application/geo+json",
-        roles=["data"]
-    )
-}
 
 item_assets_ext = ItemAssetsExtension.ext(gfm_col, add_if_missing=True)
 item_assets_ext.item_assets = assets
@@ -260,31 +190,7 @@ for dfo_path in dfolist:
                 tile_asset =  tile_asset_path.strip('/').split('/')[-1]  
 
                 # Extract the asset type from the tile_asset name
-                if 'ENSEMBLE_FLOOD' in tile_asset:
-                    asset_type = 'Observed Flood Extent'
-                elif 'ENSEMBLE_OBSWATER' in tile_asset:
-                    asset_type = 'Observed Water Extent'
-                elif 'REFERENCE_WATER_OUT' in tile_asset:
-                    asset_type = 'Reference Water Mask'
-                elif 'ENSEMBLE_EXCLAYER' in tile_asset:
-                    asset_type = 'Exclusion Mask'
-                elif 'ENSEMBLE_UNCERTAINTY' in tile_asset:
-                    asset_type = 'Likelihood Values'
-                elif 'ADVFLAG' in tile_asset:
-                    asset_type = 'Advisory Flags'
-                elif 'schedule' in tile_asset:
-                    asset_type = 'Schedule'
-                elif 'footprint' in tile_asset:
-                    asset_type = 'Footprint'
-                elif 'metadata' in tile_asset:
-                    asset_type = 'Metadata'
-                elif 'POP' in tile_asset:
-                    asset_type = 'Affected population'
-                elif 'CGLS' in tile_asset:
-                    asset_type = 'Affected Landcover'
-                else:
-                    asset_type = 'Unknown'
-
+                asset_type = determine_asset_type(tile_asset)
                 if asset_type in ['Footprint','Metadata', 'Schedule']:
                     role = 'metadata'
                 else:
@@ -349,30 +255,7 @@ for dfo_path in dfolist:
 
 # pdb.set_trace()
 # add collection to catalog then write directory to s3
-with tempfile.TemporaryDirectory() as temp_dir:
-
-    # Download the catalog and all child collections to the temporary directory
-    catalog_key = f'{catalog_path}catalog.json'
-    catalog, catalog_local_path = bench.download_catalog_and_collections(catalog_key, s3, bucket_name, temp_dir)
-
-    # set root and self href for the catalog so can add/update the collection
-    catalog.set_root(catalog)
-    catalog.set_self_href(catalog_local_path)
-
-    # remove child in case collection being updated
-    try:
-        catalog.remove_child('gfm-collection')
-    except KeyError:
-        pass
-
-    # Add collection to catalog
-    catalog.add_child(gfm_col)
-
-    # Resave the catalog to the temporary directory after adding in the collection
-    catalog.normalize_and_save(root_href=temp_dir, catalog_type=pystac.CatalogType.SELF_CONTAINED, skip_unresolved=True)    
-    
-    # Upload the contents of the temporary directory to S3
-    bench.upload_directory_to_s3(temp_dir, bucket_name, catalog_path,s3)
+bench.update_collection(gfm_col, 'gfm-collection', catalog_path, s3, bucket_name)
 
  # Validate 
 gfm_col.validate()
