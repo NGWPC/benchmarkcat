@@ -1,6 +1,5 @@
 import argparse
 import geopandas as gpd
-import pdb
 import pandas as pd
 import boto3
 import os
@@ -15,229 +14,213 @@ from pystac.summaries import Summaries
 from botocore.exceptions import NoCredentialsError, ClientError
 
 from ingest.gfm.gfm_stac import *
-from ingest import bench
+from ingest.bench import S3Utils, FlowfileUtils  
 
-# Set logging level for boto3
 logging.basicConfig(level=logging.INFO)
 
-# Create an S3 client
-s3 = boto3.client('s3')
+def initialize_s3_client():
+    return boto3.client('s3')
 
-parser = argparse.ArgumentParser()
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--link_type', type=str, default='uri', help='Link type, either "url" or "uri"')
+    parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
+    parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
+    parser.add_argument('--asset_object_key', type=str, default='benchmark/rs/', help='Key for the asset object in the S3 bucket')
+    return parser.parse_args()
 
-# Add arguments
-parser.add_argument('--link_type', type=str, default='uri', help='Link type, either "url" or "uri"')
-parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
-parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
-parser.add_argument('--asset_object_key', type=str, default='benchmark/rs/', help='Key for the asset object in the S3 bucket')
+def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
+    collection = pystac.Collection(
+        id='gfm-collection',
+        description="This collection contains the 50+ Global Flood Monitoring (GFM) flood tile groups identified by using the Dartmouth Flood Observatory (DFO) event data.",
+        title="Global Flood Monitoring Collection",
+        keywords=["flood", "GFM", "DFO"],
+        extent=pystac.Extent(
+            spatial=pystac.SpatialExtent([[-179.9, 7.2, -64.5, 61.8]]),
+            temporal=pystac.TemporalExtent([[datetime(2015, 1, 1, tzinfo=timezone.utc), None]])
+        ),
+        license='CC-BY-4.0',
+        providers=[pystac.Provider(
+            name='GLOFAS',
+            roles=[pystac.ProviderRole.PRODUCER, pystac.ProviderRole.PROCESSOR, pystac.ProviderRole.LICENSOR],
+            description='The Global Flood Awareness System (GLOFAS) provides real-time flood monitoring and early warning information.',
+            url='https://global-flood.emergency.copernicus.eu/'
+        )],
+        summaries=Summaries({
+            'platform': ['Sentinel-1'],
+            'constellation': ['Copernicus'],
+            'instruments': ['SAR'],
+            'datetime': [datetime(2015, 1, 1, tzinfo=timezone.utc).isoformat(), None],
+            'providers': ['GLOFAS'],
+            'GFM_layers': layers
+        })
+    )
 
-args = parser.parse_args()
+    collection.assets['naming_conventions'] = pystac.Asset(
+        href=s3_utils.generate_href(bucket_name, f'{asset_object_key}/gfm/gfm_data_readme.pdf', link_type),
+        title="GFM Data Readme",
+        description="This document contains the naming conventions for the GFM data.",
+        media_type="application/pdf"
+    )
 
-link_type = args.link_type
-bucket_name = args.bucket_name
-catalog_path = args.catalog_path
-asset_object_key = args.asset_object_key
+    item_assets_ext = ItemAssetsExtension.ext(collection, add_if_missing=True)
+    item_assets_ext.item_assets = assets
 
-# Define the collection
-gfm_col = pystac.Collection(
-    id='gfm-collection',
-    description="This collection contains the 50+ Global Flood Monitoring (GFM) flood tile groups identified by using the Dartmouth Flood Observatory (DFO) event data. The events are a subset of the 900+ DFO events selected based on size, time frame (2015-present), and overlap with GFM scenes in the United States.",
-    title="Global Flood Monitoring Collection",
-    keywords=["flood", "GFM", "DFO"],
-    extent=pystac.Extent(
-        spatial=pystac.SpatialExtent([[-179.9, 7.2, -64.5, 61.8]]),
-        temporal=pystac.TemporalExtent([[datetime(2015, 1, 1, tzinfo=timezone.utc), None]])
-    ),
-    license='CC-BY-4.0',
-    providers=[pystac.Provider(
-        name='GLOFAS',
-        roles=[pystac.ProviderRole.PRODUCER,pystac.ProviderRole.PROCESSOR,pystac.ProviderRole.LICENSOR],
-        description='The Global Flood Awareness System (GLOFAS) is a global hydrological forecasting and monitoring system that provides real-time flood monitoring and early warning information.',
-        url='https://global-flood.emergency.copernicus.eu/'
-    )],
-    summaries = Summaries({
-        'platform': ['Sentinel-1'],
-        'constellation': ['Copernicus'],
-        'instruments': ['SAR'],
-        'datetime': [datetime(2015, 1, 1, tzinfo=timezone.utc).isoformat(), None],
-        'providers': ['GLOFAS'],
-        'GFM_layers': layers
-    })
-)
+    return collection
 
-# attach the naming conventions metadata doc to the collection
-gfm_col.assets['naming_conventions'] = pystac.Asset(
-    href=bench.generate_href(bucket_name, f'{asset_object_key}/gfm/gfm_data_readme.pdf', s3, link_type),
-    title="GFM Data Readme",
-    description="This document contains the naming conventions for the GFM data as well as information on the output layers for each tile",
-    media_type="application/pdf"
-)
+def download_geopackage(s3, bucket_name, geo_package_key, local_path):
+    s3.download_file(bucket_name, geo_package_key, local_path)
 
-item_assets_ext = ItemAssetsExtension.ext(gfm_col, add_if_missing=True)
-item_assets_ext.item_assets = assets
+def load_geopackage(local_path):
+    return gpd.read_file(local_path)
 
-# Download the GeoPackage file from S3
-geo_package_key = 'benchmark/rs/dfo_all_usa_events_post_2015.gpkg'
-tmp_geo_package = '/tmp/dfo_all_usa_events_post_2015.gpkg'
+def get_dfo_events(s3_utils, bucket_name, asset_object_key):
+    return s3_utils.list_subdirectories(bucket_name, f"{asset_object_key}gfm/")
 
-s3.download_file(bucket_name, geo_package_key, tmp_geo_package)
-
-# Load the GeoPackage file into a GeoDataFrame
-gdf = gpd.read_file(tmp_geo_package)
-
-# Get the list of DFO events
-dfolist = bench.list_subdirectories(bucket_name, f"{asset_object_key}gfm/", s3)
-
-for dfo_path in dfolist:
-    # pull out the event footprint so can attach to item's feature as one of the polygons
-    eventid = dfo_path.strip('/').split('/')[-1]
-    print(f"indexing DFO event: {eventid}")
-    # get list of sentinel 1 tiles
-    sent_ti_list = bench.list_subdirectories(bucket_name,dfo_path,s3)
-
+def process_event(dfo_path, s3_utils, bucket_name, link_type, gdf, collection):
+    event_id = dfo_path.strip('/').split('/')[-1]
+    logging.info(f"Indexing DFO event: {event_id}")
+    
+    sent_ti_list = s3_utils.list_subdirectories(bucket_name, dfo_path)
     for sent_ti_path in sent_ti_list:
-        thumbnail_created = False
-        sent_ti = sent_ti_path.strip('/').split('/')[-1]
-        # create geometry
-        fp_list = bench.list_resources_with_string(bucket_name,sent_ti_path, s3, ['footprint'])     
-        geometry, bbox = make_item_geom(bucket_name, fp_list, gdf, int(eventid),s3)  
+        process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, gdf, collection)
 
-        # get orbit info and gfm version  
-        advflag_list = bench.list_resources_with_string(bucket_name,sent_ti_path, s3, ['ADVFLAG'])     
+def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, gdf, collection):
+    thumbnail_created = False
+    sent_ti = sent_ti_path.strip('/').split('/')[-1]
+    geom_processor = GFMGeometryCreator(bucket_name=bucket_name, s3_client=s3_utils.s3_client, gdf=gdf)
+    geometry, bbox = geom_processor.make_item_geom(s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['footprint']), int(event_id))
 
-        if advflag_list:
-            gfm_version = extract_version_string(advflag_list[0])
-            orbit_direction = extract_orbit_state(advflag_list[0])
-            if orbit_direction == 'A':
-                orbit_state = 'ascending'
-            else:
-                orbit_state = 'descending'
-        else:
-            print(f"skipping gfm version and orbit direction for {sent_ti_path}")
-            orbit_state = None
-            gfm_version = None
+    gfm_version, orbit_state, abs_orbit_num = get_orbit_info(sent_ti_path, s3_utils, bucket_name)
+    start_datetime, end_datetime = SentinelName.extract_datetimes(sent_ti)
+    dfo_start_datetime, dfo_end_datetime = get_event_datetimes(gdf, event_id)
+    flowfile_object = get_flowfile_object(sent_ti_path, s3_utils, bucket_name)
 
-        abs_orbit_num = extract_orbit_number(sent_ti_path)
+    item = create_item(event_id, sent_ti, geometry, bbox, start_datetime,end_datetime, orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object)
+    add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thumbnail_created)
+
+    collection.add_item(item)
+
+def get_orbit_info(sent_ti_path, s3_utils, bucket_name):
+    advflag_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['ADVFLAG'])
+    if advflag_list:
+        gfm_version = SentinelName.extract_version_string(advflag_list[0])
+        orbit_direction = SentinelName.extract_orbit_state(advflag_list[0])
+        orbit_state = 'ascending' if orbit_direction == 'A' else 'descending'
+    else:
+        logging.warning(f"Skipping GFM version and orbit direction for {sent_ti_path}")
+        orbit_state, gfm_version = None, None
+
+    abs_orbit_num = SentinelName.extract_orbit_number(sent_ti_path)
+    return gfm_version, orbit_state, abs_orbit_num
+
+def get_event_datetimes(gdf, event_id):
+    event_row = gdf[gdf['dfo_id'] == int(event_id)]
+    dfo_start_datetime = pd.to_datetime(event_row['began'].values[0]).replace(tzinfo=timezone.utc)
+    dfo_end_datetime = pd.to_datetime(event_row['ended'].values[0]).replace(tzinfo=timezone.utc)
+    return dfo_start_datetime, dfo_end_datetime
+
+def get_flowfile_object(sent_ti_path, s3_utils, bucket_name):
+    flowfile_key = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['flows'])
+    if flowfile_key:
+        flowfile_df = FlowfileUtils.download_flowfile(bucket_name, flowfile_key[0], s3_utils.s3_client)
+        flowstats = FlowfileUtils.extract_flowstats(flowfile_df)
+        flowfile_ids = ["NWM_v3_flowfile"]
+        return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, columns_list)
+    else:
+        logging.warning("No flowfile detected")
+        return None
+
+def create_item(event_id, sent_ti, geometry, bbox, start_datetime, end_datetime,orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object):
+    return pystac.Item(
+        id=f"DFO-{event_id}_tile-{sent_ti}",
+        geometry=geometry,
+        bbox=bbox,
+        datetime=start_datetime,
+        properties={
+            "title": f"DFO-{event_id}_tile-{sent_ti}",
+            "description": f"This item lists some of assets associated with the GFM scene {sent_ti}.",
+            "sat:orbit_state": orbit_state,
+            "sat:absolute_orbit": abs_orbit_num,
+            "gfm_data_take_start_datetime": start_datetime.isoformat(),  
+            "gfm_data_take_end_datetime": end_datetime.isoformat(),
+            "dfo_event_id": event_id,
+            "dfo_start_datetime": dfo_start_datetime.isoformat(),
+            "dfo_end_datetime": dfo_end_datetime.isoformat(),
+            "proj:epsg": 27705,
+            "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',	
+            "gsd": 20,
+            "gfm_version": gfm_version,
+            "flowfiles": flowfile_object
+        }
+    )
+
+def add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thumbnail_created):
+    equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['ADVFLAG']) if len(os.path.basename(filename).split('_')) > 2]
+    equi7tile_assets = {}
+
+    for equi7tile in equi7tiles_list:
+        tile_asset_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, [equi7tile])
+        equi7tile_assets[equi7tile] = []
+
+        for tile_asset_path in tile_asset_list:
+            asset_id, asset = create_asset(tile_asset_path, bucket_name, link_type, equi7tile, s3_utils)
+            equi7tile_assets[equi7tile].append(asset_id)
+            item.add_asset(asset_id, asset)
+
+            if not thumbnail_created and "Observed Water Extent" in asset.title:
+                create_and_add_thumbnail(item, asset_id, equi7tile, tile_asset_path, s3_utils, bucket_name, link_type)
+                thumbnail_created = True
+
+    item.properties['equi7tile_assets'] = equi7tile_assets
+
+def create_asset(tile_asset_path, bucket_name, link_type, equi7tile, s3_utils):
+    tile_asset = tile_asset_path.strip('/').split('/')[-1]
+    asset_type = determine_asset_type(tile_asset)
+    role = 'metadata' if asset_type in ['Footprint', 'Metadata', 'Schedule'] else 'data'
+    media_type = get_media_type(tile_asset)
+    asset_id = f"{equi7tile}_{asset_type.replace(' ', '_')}"
+    asset = pystac.Asset(
+        href=s3_utils.generate_href(bucket_name, tile_asset_path, link_type),
+        roles=[role],
+        media_type=media_type,
+        title=asset_type
+    )
+    return asset_id, asset
+
+def create_and_add_thumbnail(item, asset_id, equi7tile, tile_asset_path, s3_utils, bucket_name, link_type):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_extent_path = os.path.join(tmpdir, f'{equi7tile}_extent.tif')
+        local_thumbnail_path = os.path.join(tmpdir, f'{equi7tile}_extent_thumbnail.png')
+        thumbnail_s3_key = f'{tile_asset_path}{equi7tile}_extent_thumbnail.png'
+        s3_utils.make_and_upload_thumbnail(local_extent_path, local_thumbnail_path, bucket_name, thumbnail_s3_key)
         
-        # get number of equi7grid tiles
-        equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in advflag_list if len(os.path.basename(filename).split('_')) > 2]
-
-        # get datetime
-        start_datetime, end_datetime = extract_datetimes(sent_ti)
-
-        # Extract dfo_start_datetime and dfo_end_datetime from the GeoDataFrame
-        event_row = gdf[gdf['dfo_id'] == int(eventid)]
-        dfo_start_datetime = pd.to_datetime(event_row['began'].values[0]).replace(tzinfo=timezone.utc)
-        dfo_end_datetime = pd.to_datetime(event_row['ended'].values[0]).replace(tzinfo=timezone.utc)
-
-        # create flowfile object
-        flowfile_key = bench.list_resources_with_string(bucket_name, sent_ti_path, s3, ['flows'])
-        if flowfile_key:
-            flowfile_df = bench.download_flowfile(bucket_name, flowfile_key[0], s3)
-            flowstats = bench.extract_flowstats(flowfile_df)
-            flowfile_ids = ["NWM_v3_flowfile"]
-            # columns_list in gfm_stac.py
-            flowfile_object = bench.create_flowfile_object(flowfile_ids,flowstats, columns_list)
-        else:
-            print("no flowfile detected")
-            flowfile_object = None    
-
-        # initialize item
-        item = pystac.Item(
-            id=f"DFO-{eventid}_tile-{sent_ti}",
-            geometry=geometry,
-            bbox=bbox,
-            datetime=start_datetime,
-            properties={
-                "title": f"DFO-{eventid}_tile-{sent_ti}",
-                "description": f"This item lists some of assets associated with the GFM scene {sent_ti}. Each asset is associated with an equi7grid tile within the GFM scene.",
-                "sat:orbit_state": orbit_state,
-                "sat:absolute_orbit": abs_orbit_num,
-                "gfm_data_take_start_datetime":start_datetime.isoformat(),  
-                "gfm_data_take_end_datetime":end_datetime.isoformat(),
-                "dfo_event_id": eventid,
-                "dfo_start_datetime": dfo_start_datetime.replace(tzinfo=timezone.utc).isoformat(),
-                "dfo_end_datetime": dfo_end_datetime.replace(tzinfo=timezone.utc).isoformat(),
-                "proj:epsg": 27705,
-                "proj:wkt2":'+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',	
-                "gsd":20,
-                "gfm_version": gfm_version,
-                "flowfiles": flowfile_object
-            }
-        )
-        # add the sat and projection extension to the item
-        sat_ext = SatExtension.ext(item, add_if_missing=True)
-        proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
-
-        # add the flowfile asset
-        if flowfile_key:
-            item.add_asset(
-                "NWM_v3_flowfile",
-                pystac.Asset(
-                    href= bench.generate_href(bucket_name,flowfile_key[0],s3,link_type),
-                    media_type="application/json",
-                    roles=["data"],
-                    description=f"flowfile for granule: {sent_ti}"
-                )
+        item.add_asset(
+            f"{equi7tile}_thumbnail",
+            pystac.Asset(
+                href=s3_utils.generate_href(bucket_name, thumbnail_s3_key, link_type),
+                media_type="image/png",
+                roles=["thumbnail"],
+                title=f"{equi7tile} thumbnail"
             )
-       
-        # loop through the equi7grid tiles in the sentinel tile and add those assets also create an equi7tile_assets object that can be attached to the items properties
-        equi7tile_assets = {}
-        for equi7tile in equi7tiles_list:
-            tile_asset_list = bench.list_resources_with_string(bucket_name, sent_ti_path, s3, [equi7tile])
-            equi7tile_assets[equi7tile] = []
+        )
 
-            for tile_asset_path in tile_asset_list:
-                tile_asset =  tile_asset_path.strip('/').split('/')[-1]  
+def main():
+    args = parse_arguments()
+    s3 = initialize_s3_client()
+    s3_utils = S3Utils(s3)
+    
+    collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    local_geopackage_path = '/tmp/dfo_all_usa_events_post_2015.gpkg'
+    download_geopackage(s3, args.bucket_name, 'benchmark/rs/dfo_all_usa_events_post_2015.gpkg', local_geopackage_path)
+    gdf = load_geopackage(local_geopackage_path)
+    
+    dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
+    for dfo_event in dfo_events:
+        process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, gdf, collection)
 
-                # Extract the asset type from the tile_asset name
-                asset_type = determine_asset_type(tile_asset)
-                if asset_type in ['Footprint','Metadata', 'Schedule']:
-                    role = 'metadata'
-                else:
-                    role = 'data'
+    s3_utils.update_collection(collection, 'gfm-collection', args.catalog_path, args.bucket_name)
+    collection.validate()
 
-                media_type = get_media_type(tile_asset)
-                asset_id = f"{equi7tile}_{asset_type.replace(' ', '_')}"
-                equi7tile_assets[equi7tile].append(asset_id)
-
-                item.add_asset(
-                    asset_id,
-                    pystac.Asset(
-                        href=bench.generate_href(bucket_name, tile_asset_path, s3, link_type),
-                        roles=[role],
-                        media_type=media_type,
-                        title=asset_type
-                    )
-                )
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    if not thumbnail_created and asset_type == 'Observed Water Extent':
-                        local_extent_path = os.path.join(tmpdir, f'{equi7tile}_extent.tif')
-                        local_thumbnail_path = os.path.join(tmpdir, f'{equi7tile}_extent_thumbnail.png')
-                        thumbnail_s3_key = f'{sent_ti_path}{equi7tile}_extent_thumbnail.png'
-                        bench.make_and_upload_thumbnail(local_extent_path,local_thumbnail_path,bucket_name,thumbnail_s3_key,s3)
-
-                        # add thumbnail to item
-                        item.add_asset(
-                            f"{equi7tile}_thumbnail",
-                            pystac.Asset(
-                                href= bench.generate_href(bucket_name, thumbnail_s3_key, s3, link_type),
-                                media_type="image/png",
-                                roles=["thumbnail"],
-                                title=f"{equi7tile} thumbnail"
-                            )
-                        )
-                
-                        thumbnail_created = True
-
-        item.properties['equi7tile_assets'] = equi7tile_assets
-
-        # add item to collection
-        gfm_col.add_item(item)
-
-# pdb.set_trace()
-# add collection to catalog then write directory to s3
-bench.update_collection(gfm_col, 'gfm-collection', catalog_path, s3, bucket_name)
-
- # Validate 
-gfm_col.validate()
+if __name__ == "__main__":
+    main()

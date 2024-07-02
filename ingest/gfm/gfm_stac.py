@@ -6,24 +6,17 @@ import re
 from datetime import datetime, timezone
 import pystac
 from pystac.extensions.item_assets import AssetDefinition
+from typing import List, Tuple, Dict, Union
 from pyproj import Transformer
+import geopandas as gpd
 
-def make_item_geom(bucket_name, keys, gdf, dfo_id, s3):
-    geojson_geometries = []
+class GeoJSONHandler:
+    def __init__(self, transformer: Transformer):
+        self.transformer = transformer
 
-    # Select the geometry from the GeoDataFrame based on dfo_id
-    gdf_geom = gdf[gdf['dfo_id'] == dfo_id].geometry.values[0]
-    geojson_geometries.append(gdf_geom)
-
-    # Initialize the transformer for coordinate transformation
-    transformer = Transformer.from_crs('EPSG:4326', 'EPSG:4326', always_xy=True)
-
-    for key in keys:
-        response = s3.get_object(Bucket=bucket_name, Key=key)
-        geojson_content = response['Body'].read().decode('utf-8')
+    def process_geojson(self, geojson_content: str) -> List[Union[Polygon, MultiPolygon]]:
         geojson_dict = json.loads(geojson_content)
 
-        # Check if the GeoJSON is a FeatureCollection or a single Feature
         if geojson_dict['type'] == 'FeatureCollection':
             features = geojson_dict['features']
         elif geojson_dict['type'] == 'Feature':
@@ -31,88 +24,155 @@ def make_item_geom(bucket_name, keys, gdf, dfo_id, s3):
         else:
             raise ValueError(f"Unsupported GeoJSON type: {geojson_dict['type']}")
 
+        geometries = []
         for feature in features:
             geom = feature['geometry']
             shapely_geom = shape(geom)
-            transformed_geom = transform(transformer.transform, shapely_geom)
-            geojson_geometries.append(transformed_geom)
-
-    # Flatten the list of geometries
-    flattened_geometries = []
-    for geom in geojson_geometries:
-        if isinstance(geom, Polygon):
-            flattened_geometries.append(geom)
-        elif isinstance(geom, MultiPolygon):
-            flattened_geometries.extend([poly for poly in geom.geoms])
-        else:
-            raise ValueError(f"Unsupported geometry type: {type(geom)}")
-
-    # Combine all geometries into a single MultiPolygon
-    combined_geometry = MultiPolygon(flattened_geometries)
-
-    # Calculate the combined bbox
-    bbox = combined_geometry.bounds
-    combined_bbox = [bbox[0], bbox[1], bbox[2], bbox[3]]
-
-    # Ensure the output is JSON-serializable
-    geojson_geometry = json.loads(json.dumps(mapping(combined_geometry)))
-
-    return geojson_geometry, combined_bbox
-
-def extract_datetimes(sentinel_string):
-    # Regular expression to extract datetime strings
-    datetime_pattern = re.compile(r'_(\d{8}T\d{6})_(\d{8}T\d{6})_')
-    match = datetime_pattern.search(sentinel_string)
-    
-    if match:
-        start_datetime_str = match.group(1)
-        end_datetime_str = match.group(2)
+            transformed_geom = transform(self.transformer.transform, shapely_geom)
+            geometries.append(transformed_geom)
         
-        # Convert to datetime objects
-        start_datetime = datetime.strptime(start_datetime_str, '%Y%m%dT%H%M%S').replace(tzinfo=timezone.utc)
-        end_datetime = datetime.strptime(end_datetime_str, '%Y%m%dT%H%M%S').replace(tzinfo=timezone.utc)
-        return start_datetime, end_datetime
-    else:
-        raise ValueError("No valid datetime strings found in the input data string")
+        return geometries
 
-def extract_orbit_state(filename):
-    # Regular expression to match the filename pattern and extract the orbit state (A or D)
-    pattern = re.compile(r'.*?_[VH]{2}_([AD]).*')
-    match = pattern.match(filename)
-    
-    if match:
-        orbit_state = match.group(1)
-        return orbit_state
-    else:
-        raise ValueError("No valid orbit state found in the input filename")
+    def combine_geometries(self, geometries: List[Union[Polygon, MultiPolygon]]) -> Tuple[dict, List[float]]:
+        flattened_geometries = []
+        for geom in geometries:
+            if isinstance(geom, Polygon):
+                flattened_geometries.append(geom)
+            elif isinstance(geom, MultiPolygon):
+                flattened_geometries.extend([poly for poly in geom.geoms])
+            else:
+                raise ValueError(f"Unsupported geometry type: {type(geom)}")
 
-def extract_orbit_number(filename):
-    # Regular expression to match the filename pattern and extract the orbit number (OOOOOO)
-    pattern = re.compile(r'.*?_\d{8}T\d{6}_\d{8}T\d{6}_(\d{6})_.*')
-    match = pattern.match(filename)
-   
-    if match:
-        orbit_number = match.group(1)
-        return orbit_number
-    else:
-        raise ValueError("No valid orbit number found in the input filename")
+        combined_geometry = MultiPolygon(flattened_geometries)
+        bbox = combined_geometry.bounds
+        combined_bbox = [bbox[0], bbox[1], bbox[2], bbox[3]]
 
-def extract_version_string(filepath):
-    # Extract the filename from the full path
-    filename = os.path.basename(filepath)
-    
-    # Regular expression to match the version string immediately preceding "_S1"
-    pattern = re.compile(r'_(V\d+M\d+R\d+)_S1')
-    match = pattern.search(filename)
-    
-    if match:
-        version_string = match.group(1)
-        return version_string
-    else:
-        raise ValueError("No valid version string found in the input filename")
-  
+        geojson_geometry = json.loads(json.dumps(mapping(combined_geometry)))
+        return geojson_geometry, combined_bbox
+
+class SentinelName:
+    @staticmethod
+    def extract_datetimes(sentinel_string: str) -> Tuple[datetime, datetime]:
+        datetime_pattern = re.compile(r'_(\d{8}T\d{6})_(\d{8}T\d{6})_')
+        match = datetime_pattern.search(sentinel_string)
+        
+        if match:
+            start_datetime_str = match.group(1)
+            end_datetime_str = match.group(2)
+            start_datetime = datetime.strptime(start_datetime_str, '%Y%m%dT%H%M%S').replace(tzinfo=timezone.utc)
+            end_datetime = datetime.strptime(end_datetime_str, '%Y%m%dT%H%M%S').replace(tzinfo=timezone.utc)
+            return start_datetime, end_datetime
+        else:
+            raise ValueError("No valid datetime strings found in the input data string")
+
+    @staticmethod
+    def extract_orbit_state(filename: str) -> str:
+        pattern = re.compile(r'.*?_[VH]{2}_([AD]).*')
+        match = pattern.match(filename)
+        
+        if match:
+            return match.group(1)
+        else:
+            raise ValueError("No valid orbit state found in the input filename")
+
+    @staticmethod
+    def extract_orbit_number(filename: str) -> str:
+        pattern = re.compile(r'.*?_\d{8}T\d{6}_\d{8}T\d{6}_(\d{6})_.*')
+        match = pattern.match(filename)
+        
+        if match:
+            return match.group(1)
+        else:
+            raise ValueError("No valid orbit number found in the input filename")
+
+    @staticmethod
+    def extract_version_string(filepath: str) -> str:
+        filename = os.path.basename(filepath)
+        pattern = re.compile(r'_(V\d+M\d+R\d+)_S1')
+        match = pattern.search(filename)
+        
+        if match:
+            return match.group(1)
+        else:
+            raise ValueError("No valid version string found in the input filename")
+
+class AssetUtils:
+    @staticmethod
+    def determine_asset_type(tile_asset: str) -> str:
+        if 'ENSEMBLE_FLOOD' in tile_asset:
+            return 'Observed Flood Extent'
+        elif 'ENSEMBLE_OBSWATER' in tile_asset:
+            return 'Observed Water Extent'
+        elif 'REFERENCE_WATER_OUT' in tile_asset:
+            return 'Reference Water Mask'
+        elif 'ENSEMBLE_EXCLAYER' in tile_asset:
+            return 'Exclusion Mask'
+        elif 'ENSEMBLE_UNCERTAINTY' in tile_asset:
+            return 'Likelihood Values'
+        elif 'ADVFLAG' in tile_asset:
+            return 'Advisory Flags'
+        elif 'schedule' in tile_asset:
+            return 'Schedule'
+        elif 'footprint' in tile_asset:
+            return 'Footprint'
+        elif 'metadata' in tile_asset:
+            return 'Metadata'
+        elif 'POP' in tile_asset:
+            return 'Affected population'
+        elif 'CGLS' in tile_asset:
+            return 'Affected Landcover'
+        else:
+            return 'Unknown'
+
+    @staticmethod
+    def get_media_type(file_name: str) -> str:
+        media_types = {
+            ".tif": pystac.MediaType.GEOTIFF,
+            ".tiff": pystac.MediaType.GEOTIFF,
+            ".geojson": pystac.MediaType.GEOJSON,
+            ".json": pystac.MediaType.JSON,
+            ".pdf": pystac.MediaType.PDF,
+            ".jpeg": pystac.MediaType.JPEG,
+            ".jpg": pystac.MediaType.JPEG,
+            ".png": pystac.MediaType.PNG,
+            ".xml": pystac.MediaType.XML,
+            ".txt": pystac.MediaType.TEXT,
+            ".hdf": pystac.MediaType.HDF,
+            ".h5": pystac.MediaType.HDF5,
+            ".jp2": pystac.MediaType.JPEG2000,
+            ".kml": pystac.MediaType.KML,
+            ".fgb": pystac.MediaType.FLATGEOBUF,
+            ".gpkg": pystac.MediaType.GEOPACKAGE,
+            ".parquet": pystac.MediaType.PARQUET,
+            ".zarr": pystac.MediaType.ZARR,
+            ".html": pystac.MediaType.HTML
+        }
+        ext = os.path.splitext(file_name)[1]
+        return media_types.get(ext, "application/octet-stream")
+
+class GFMGeometryCreator:
+    def __init__(self, bucket_name: str, s3_client, gdf: gpd.GeoDataFrame):
+        self.bucket_name = bucket_name
+        self.s3_client = s3_client
+        self.gdf = gdf
+        self.transformer = Transformer.from_crs('EPSG:4326', 'EPSG:4326', always_xy=True)
+        self.geojson_handler = GeoJSONHandler(self.transformer)
+
+    def make_item_geom(self, keys: List[str], dfo_id: int) -> Tuple[dict, List[float]]:
+        geojson_geometries = []
+
+        gdf_geom = self.gdf[self.gdf['dfo_id'] == dfo_id].geometry.values[0]
+        geojson_geometries.append(gdf_geom)
+
+        for key in keys:
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
+            geojson_content = response['Body'].read().decode('utf-8')
+            geometries = self.geojson_handler.process_geojson(geojson_content)
+            geojson_geometries.extend(geometries)
+
+        return self.geojson_handler.combine_geometries(geojson_geometries)
+
 ####### Encoded data specific to the gfm collection #######
-# helper function to get media type based on the file name of the asset
 columns_list = [{
                 "feature_id": {
                     "Column description": "feature id that identifies the stream segment being modeled or measured",
@@ -125,80 +185,6 @@ columns_list = [{
                     "data_href": "https://registry.opendata.aws/nwm-archive/"
                 }
             }]
-
-def determine_asset_type(tile_asset):
-    """
-    Determine the asset type based on the tile asset name.
-
-    Args:
-        tile_asset (str): The name of the tile asset.
-
-    Returns:
-        str: The asset type.
-    """
-    if 'ENSEMBLE_FLOOD' in tile_asset:
-        return 'Observed Flood Extent'
-    elif 'ENSEMBLE_OBSWATER' in tile_asset:
-        return 'Observed Water Extent'
-    elif 'REFERENCE_WATER_OUT' in tile_asset:
-        return 'Reference Water Mask'
-    elif 'ENSEMBLE_EXCLAYER' in tile_asset:
-        return 'Exclusion Mask'
-    elif 'ENSEMBLE_UNCERTAINTY' in tile_asset:
-        return 'Likelihood Values'
-    elif 'ADVFLAG' in tile_asset:
-        return 'Advisory Flags'
-    elif 'schedule' in tile_asset:
-        return 'Schedule'
-    elif 'footprint' in tile_asset:
-        return 'Footprint'
-    elif 'metadata' in tile_asset:
-        return 'Metadata'
-    elif 'POP' in tile_asset:
-        return 'Affected population'
-    elif 'CGLS' in tile_asset:
-        return 'Affected Landcover'
-    else:
-        return 'Unknown'
-
-# Helper function to get media type based on file extension
-def get_media_type(file_name):
-    if file_name.endswith(".tif") or file_name.endswith(".tiff"):
-        return pystac.MediaType.GEOTIFF
-    elif file_name.endswith(".geojson"):
-        return pystac.MediaType.GEOJSON
-    elif file_name.endswith(".json"):
-        return pystac.MediaType.JSON
-    elif file_name.endswith(".pdf"):
-        return pystac.MediaType.PDF
-    elif file_name.endswith(".jpeg") or file_name.endswith(".jpg"):
-        return pystac.MediaType.JPEG
-    elif file_name.endswith(".png"):
-        return pystac.MediaType.PNG
-    elif file_name.endswith(".xml"):
-        return pystac.MediaType.XML
-    elif file_name.endswith(".txt"):
-        return pystac.MediaType.TEXT
-    elif file_name.endswith(".hdf"):
-        return pystac.MediaType.HDF
-    elif file_name.endswith(".h5"):
-        return pystac.MediaType.HDF5
-    elif file_name.endswith(".jp2"):
-        return pystac.MediaType.JPEG2000
-    elif file_name.endswith(".kml"):
-        return pystac.MediaType.KML
-    elif file_name.endswith(".fgb"):
-        return pystac.MediaType.FLATGEOBUF
-    elif file_name.endswith(".gpkg"):
-        return pystac.MediaType.GEOPACKAGE
-    elif file_name.endswith(".parquet"):
-        return pystac.MediaType.PARQUET
-    elif file_name.endswith(".zarr"):
-        return pystac.MediaType.ZARR
-    elif file_name.endswith(".html"):
-        return pystac.MediaType.HTML
-    else:
-        return "application/octet-stream"
 
 # Add list of item assets
 assets = {
