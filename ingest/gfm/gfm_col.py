@@ -1,5 +1,6 @@
 import argparse
 import geopandas as gpd
+import pdb
 import pandas as pd
 import boto3
 import os
@@ -13,13 +14,15 @@ from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.summaries import Summaries
 from botocore.exceptions import NoCredentialsError, ClientError
 
-from ingest.gfm.gfm_stac import *
+from ingest.gfm.gfm_stac import GFMGeometryCreator,SentinelName, AssetUtils, GFMInfo
 from ingest.bench import S3Utils, FlowfileUtils  
 
 logging.basicConfig(level=logging.INFO)
 
-def initialize_s3_client():
-    return boto3.client('s3')
+def initialize_s3_utils():
+    s3 = boto3.client('s3')
+    s3_utils = S3Utils(s3)
+    return s3_utils
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -52,7 +55,7 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
             'instruments': ['SAR'],
             'datetime': [datetime(2015, 1, 1, tzinfo=timezone.utc).isoformat(), None],
             'providers': ['GLOFAS'],
-            'GFM_layers': layers
+            'GFM_layers': GFMInfo.layers
         })
     )
 
@@ -64,7 +67,7 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
     )
 
     item_assets_ext = ItemAssetsExtension.ext(collection, add_if_missing=True)
-    item_assets_ext.item_assets = assets
+    item_assets_ext.item_assets = GFMInfo.assets
 
     return collection
 
@@ -126,7 +129,7 @@ def get_flowfile_object(sent_ti_path, s3_utils, bucket_name):
         flowfile_df = FlowfileUtils.download_flowfile(bucket_name, flowfile_key[0], s3_utils.s3_client)
         flowstats = FlowfileUtils.extract_flowstats(flowfile_df)
         flowfile_ids = ["NWM_v3_flowfile"]
-        return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, columns_list)
+        return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, GFMInfo.columns_list)
     else:
         logging.warning("No flowfile detected")
         return None
@@ -169,16 +172,16 @@ def add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thu
             item.add_asset(asset_id, asset)
 
             if not thumbnail_created and "Observed Water Extent" in asset.title:
-                create_and_add_thumbnail(item, asset_id, equi7tile, tile_asset_path, s3_utils, bucket_name, link_type)
+                create_and_add_thumbnail(item, equi7tile, tile_asset_path, s3_utils, bucket_name, link_type)
                 thumbnail_created = True
 
     item.properties['equi7tile_assets'] = equi7tile_assets
 
 def create_asset(tile_asset_path, bucket_name, link_type, equi7tile, s3_utils):
     tile_asset = tile_asset_path.strip('/').split('/')[-1]
-    asset_type = determine_asset_type(tile_asset)
+    asset_type = AssetUtils.determine_asset_type(tile_asset)
     role = 'metadata' if asset_type in ['Footprint', 'Metadata', 'Schedule'] else 'data'
-    media_type = get_media_type(tile_asset)
+    media_type = AssetUtils.get_media_type(tile_asset)
     asset_id = f"{equi7tile}_{asset_type.replace(' ', '_')}"
     asset = pystac.Asset(
         href=s3_utils.generate_href(bucket_name, tile_asset_path, link_type),
@@ -188,17 +191,16 @@ def create_asset(tile_asset_path, bucket_name, link_type, equi7tile, s3_utils):
     )
     return asset_id, asset
 
-def create_and_add_thumbnail(item, asset_id, equi7tile, tile_asset_path, s3_utils, bucket_name, link_type):
+def create_and_add_thumbnail(item, equi7tile, tile_asset_path, s3_utils, bucket_name, link_type):
     with tempfile.TemporaryDirectory() as tmpdir:
         local_extent_path = os.path.join(tmpdir, f'{equi7tile}_extent.tif')
         local_thumbnail_path = os.path.join(tmpdir, f'{equi7tile}_extent_thumbnail.png')
-        thumbnail_s3_key = f'{tile_asset_path}{equi7tile}_extent_thumbnail.png'
-        s3_utils.make_and_upload_thumbnail(local_extent_path, local_thumbnail_path, bucket_name, thumbnail_s3_key)
+        thumbnail_s3_path = s3_utils.make_and_upload_thumbnail(local_extent_path, local_thumbnail_path, bucket_name, tile_asset_path)
         
         item.add_asset(
             f"{equi7tile}_thumbnail",
             pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, thumbnail_s3_key, link_type),
+                href=s3_utils.generate_href(bucket_name, thumbnail_s3_path, link_type),
                 media_type="image/png",
                 roles=["thumbnail"],
                 title=f"{equi7tile} thumbnail"
@@ -207,12 +209,11 @@ def create_and_add_thumbnail(item, asset_id, equi7tile, tile_asset_path, s3_util
 
 def main():
     args = parse_arguments()
-    s3 = initialize_s3_client()
-    s3_utils = S3Utils(s3)
+    s3_utils = initialize_s3_utils() 
     
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     local_geopackage_path = '/tmp/dfo_all_usa_events_post_2015.gpkg'
-    download_geopackage(s3, args.bucket_name, 'benchmark/rs/dfo_all_usa_events_post_2015.gpkg', local_geopackage_path)
+    download_geopackage(s3_utils.s3_client, args.bucket_name, 'benchmark/rs/dfo_all_usa_events_post_2015.gpkg', local_geopackage_path)
     gdf = load_geopackage(local_geopackage_path)
     
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)

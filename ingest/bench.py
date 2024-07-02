@@ -21,14 +21,18 @@ class S3Utils:
             # Download the file from S3
             self.s3_client.download_file(bucket_name, s3_path, local_asset_path)
             print(f"Downloaded extent raster to {local_asset_path}")
-
             # Create thumbnail
             RasterUtils.create_preview(local_asset_path, local_thumbnail_path)
 
             # Upload thumbnail to S3
-            self.s3_client.upload_file(local_thumbnail_path, bucket_name, s3_path)
-            print(f"Uploaded thumbnail to s3://{bucket_name}/{s3_path}")
+            s3_dir = os.path.dirname(s3_path)  
+            filename = os.path.basename(local_thumbnail_path) 
+            thumbnail_s3_path = os.path.join(s3_dir, filename) 
+            self.s3_client.upload_file(local_thumbnail_path, bucket_name, thumbnail_s3_path)
+            print(f"Uploaded thumbnail to s3://{bucket_name}/{thumbnail_s3_path}")
 
+            return thumbnail_s3_path
+            
         except NoCredentialsError:
             print("Credentials not available")
             return None
