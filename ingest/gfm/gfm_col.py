@@ -100,7 +100,7 @@ def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, gdf, 
     flowfile_object = get_flowfile_object(sent_ti_path, s3_utils, bucket_name)
     maincause = gdf.loc[gdf['dfo_id'] == int(event_id), 'maincause'].values[0]
 
-    item = create_item(event_id, sent_ti, geometry, bbox, start_datetime,end_datetime, orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object, 'maincause')
+    item = create_item(event_id, sent_ti, geometry, bbox, start_datetime,end_datetime, orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object, maincause)
     add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thumbnail_created)
 
     collection.add_item(item)
@@ -135,7 +135,7 @@ def get_flowfile_object(sent_ti_path, s3_utils, bucket_name):
         logging.warning("No flowfile detected")
         return None
 
-def create_item(event_id, sent_ti, geometry, bbox, start_datetime, end_datetime,orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object):
+def create_item(event_id, sent_ti, geometry, bbox, start_datetime, end_datetime,orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object,maincause):
     return pystac.Item(
         id=f"DFO-{event_id}_tile-{sent_ti}",
         geometry=geometry,
