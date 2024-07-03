@@ -155,7 +155,7 @@ def create_item(event_id, sent_ti, geometry, bbox, start_datetime, end_datetime,
             "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',	
             "gsd": 20,
             "gfm_version": gfm_version,
-            "flowfiles": flowfile_object
+            "flowfiles": flowfile_object,
             "maincause": maincause
         }
     )
