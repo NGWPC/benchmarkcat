@@ -121,6 +121,8 @@ class AssetUtils:
             return 'Affected population'
         elif 'CGLS' in tile_asset:
             return 'Affected Landcover'
+        elif 'thumbnail' in tile_asset:
+            return 'Thumbnail'
         else:
             return 'Unknown'
 

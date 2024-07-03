@@ -144,6 +144,7 @@ def create_item(event_id, sent_ti, geometry, bbox, start_datetime, end_datetime,
         properties={
             "title": f"DFO-{event_id}_tile-{sent_ti}",
             "description": f"This item lists some of assets associated with the GFM scene {sent_ti}.",
+            "maincause": maincause,
             "sat:orbit_state": orbit_state,
             "sat:absolute_orbit": abs_orbit_num,
             "gfm_data_take_start_datetime": start_datetime.isoformat(),  
@@ -155,8 +156,7 @@ def create_item(event_id, sent_ti, geometry, bbox, start_datetime, end_datetime,
             "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',	
             "gsd": 20,
             "gfm_version": gfm_version,
-            "flowfiles": flowfile_object,
-            "maincause": maincause
+            "flowfiles": flowfile_object
         }
     )
 
@@ -219,7 +219,7 @@ def main():
     gdf = load_geopackage(local_geopackage_path)
     
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
-    for dfo_event in dfo_events:
+    for dfo_event in dfo_events[0:1]:
         process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, gdf, collection)
 
     s3_utils.update_collection(collection, 'gfm-collection', args.catalog_path, args.bucket_name)
