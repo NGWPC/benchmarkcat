@@ -2,7 +2,7 @@
 Script to change out asset hrefs. This is so that one can quickly change out the type or value for the href path when data location changes. The most typical use case for this script would be to generate new signed URL's for a catalog or to switch out the asset href from an "s3://" to an http url. 
 
 Usage:
-    python -m ingest.update_asset_links --cat_dir full_path_to_stac_catalog --link_type link_type
+    python -m ingest.update_asset_links --cat_dir full_path_to_stac_catalog_directory --link_type link_type
 
 Arguments:
 "--cat_dir": path to a locally mounted directory containing the catalog.
@@ -15,13 +15,9 @@ Potential Changes:
 
 import argparse
 import os
-import json
-import io
 import pystac
 from ingest.bench import S3Utils
-from botocore.exceptions import NoCredentialsError, ClientError
 import boto3
-import tempfile
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -56,6 +52,8 @@ def update_asset_hrefs(catalog, s3_utils, link_type):
                 print(f"Updated asset href for {asset_key}: {new_href}")
             except ValueError as e:
                 print(f"Error updating asset {asset_key}: {e}")
+        # Save the updated item back to its original location
+        item.save_object()
 
 def main():
     args = parse_arguments()
@@ -66,10 +64,9 @@ def main():
     catalog = load_catalog(args.cat_dir)
     update_asset_hrefs(catalog, s3_utils, args.link_type)
     
-    # Save updated catalog
-    catalog_path = os.path.join(args.cat_dir, 'catalog-updated.json')
-    catalog.save_object(dest_href=catalog_path)
-    print(f"Updated catalog saved to {catalog_path}")
+    # Save updated catalog inside of directory you call script 
+    catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    print(f"Catalog updated in place at {args.cat_dir}")
 
 if __name__ == "__main__":
     main()
