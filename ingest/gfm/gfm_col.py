@@ -98,8 +98,9 @@ def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, gdf, 
     start_datetime, end_datetime = SentinelName.extract_datetimes(sent_ti)
     dfo_start_datetime, dfo_end_datetime = get_event_datetimes(gdf, event_id)
     flowfile_object = get_flowfile_object(sent_ti_path, s3_utils, bucket_name)
+    maincause = gdf.loc[gdf['dfo_id'] == int(event_id), 'maincause'].values[0]
 
-    item = create_item(event_id, sent_ti, geometry, bbox, start_datetime,end_datetime, orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object)
+    item = create_item(event_id, sent_ti, geometry, bbox, start_datetime,end_datetime, orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object, 'maincause')
     add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thumbnail_created)
 
     collection.add_item(item)
@@ -155,11 +156,12 @@ def create_item(event_id, sent_ti, geometry, bbox, start_datetime, end_datetime,
             "gsd": 20,
             "gfm_version": gfm_version,
             "flowfiles": flowfile_object
+            "maincause": maincause
         }
     )
 
 def add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thumbnail_created):
-    equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['ADVFLAG']) if len(os.path.basename(filename).split('_')) > 2]
+    equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['OBSWATER']) if len(os.path.basename(filename).split('_')) > 2]
     equi7tile_assets = {}
 
     for equi7tile in equi7tiles_list:
@@ -187,7 +189,7 @@ def create_asset(tile_asset_path, bucket_name, link_type, equi7tile, s3_utils):
         href=s3_utils.generate_href(bucket_name, tile_asset_path, link_type),
         roles=[role],
         media_type=media_type,
-        title=asset_type
+        title=f"{equi7tile} {asset_type}"
     )
     return asset_id, asset
 
