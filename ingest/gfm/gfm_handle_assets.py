@@ -3,10 +3,11 @@ import json
 import logging
 import tempfile
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import timezone
 import geopandas as gpd
-from ingest.gfm.gfm_stac import GFMGeometryCreator, SentinelName, AssetUtils, GFMInfo
-from ingest.bench import S3Utils, FlowfileUtils
+import pdb
+from ingest.gfm.gfm_stac import GFMInfo, GFMGeometryCreator 
+from ingest.bench import FlowfileUtils
 from typing import Dict
 
 class GFMAssetHandler:
@@ -19,7 +20,9 @@ class GFMAssetHandler:
         self.s3_utils = s3_utils
         self.bucket_name = bucket_name
         self.results_file = results_file
-
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.results_file = os.path.join(script_dir, results_file)
+         
     def tile_assets_processed(self, sent_ti_path) -> bool:
         if os.path.exists(self.results_file):
             with open(self.results_file, 'r') as f:
@@ -42,7 +45,9 @@ class GFMAssetHandler:
         thumbnail_key = self.create_and_add_thumbnail(self.s3_utils, self.bucket_name, sent_ti_path)
 
         gfm_geom_creator = GFMGeometryCreator(bucket_name=self.bucket_name, s3_client=self.s3_utils.s3_client, gdf_geom=gdf_geom)
-        geometry, bbox = gfm_geom_creator.make_item_geom(self.s3_utils.list_resources_with_string(self.bucket_name, sent_ti_path, ['footprint']))
+        # when initializing the geom_creator only send in 1 footprint since all the equi7grid tiles in the item will have the same sentinel-1 footprint
+        # pdb.set_trace()
+        geometry, bbox = gfm_geom_creator.make_item_geom(self.s3_utils.list_resources_with_string(self.bucket_name, sent_ti_path, ['footprint'])[0])
 
         results[sent_ti_path] = {
             "flowfile_object": flowfile_object,

@@ -160,16 +160,15 @@ class GFMGeometryCreator:
         self.transformer = Transformer.from_crs('EPSG:4326', 'EPSG:4326', always_xy=True)
         self.geojson_handler = GeoJSONHandler(self.transformer)
 
-    def make_item_geom(self, keys: List[str]) -> Tuple[dict, List[float]]:
+    def make_item_geom(self, key: str) -> Tuple[dict, List[float]]:
         geojson_geometries = []
 
         geojson_geometries.append(self.gdf_geom)
 
-        for key in keys:
-            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
-            geojson_content = response['Body'].read().decode('utf-8')
-            geometries = self.geojson_handler.process_geojson(geojson_content)
-            geojson_geometries.extend(geometries)
+        response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
+        geojson_content = response['Body'].read().decode('utf-8')
+        geometries = self.geojson_handler.process_geojson(geojson_content)
+        geojson_geometries.extend(geometries)
 
         return self.geojson_handler.combine_geometries(geojson_geometries)
 

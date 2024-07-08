@@ -11,11 +11,11 @@ from pystac.extensions.sat import SatExtension
 from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.item_assets import ItemAssetsExtension 
 from pystac.summaries import Summaries
-from botocore.exceptions import NoCredentialsError, ClientError
-
+from pystac.extensions.sat import SatExtension
+from pystac.extensions.projection import ProjectionExtension
 from ingest.gfm.gfm_handle_assets import GFMAssetHandler
-from ingest.gfm.gfm_stac import GFMGeometryCreator, SentinelName, AssetUtils, GFMInfo
-from ingest.bench import S3Utils, FlowfileUtils  
+from ingest.gfm.gfm_stac import SentinelName, AssetUtils, GFMInfo
+from ingest.bench import S3Utils 
 
 logging.basicConfig(level=logging.INFO)
 
@@ -102,7 +102,12 @@ def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, colle
     main_cause = asset_results["main_cause"]
 
     item = create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, end_datetime, orbit_state, abs_orbit_num, gfm_version, flowfile_object)
-    add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, asset_results["thumbnail_key"], asset_results["flowfile_key"])
+
+    # add extensions to item
+    SatExtension.ext(item, add_if_missing=True)
+    ProjectionExtension.ext(item, add_if_missing=True)
+
+    add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, asset_results["flowfile_key"])
 
     collection.add_item(item)
 
@@ -142,21 +147,15 @@ def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, e
         }
     )
 
-def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, thumbnail_key, flowfile_key):
+
+def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, flowfile_key):
     equi7tile_assets = {}
     if flowfile_key:
         equi7tile = None
         asset_id, asset = create_asset(flowfile_key[0], bucket_name, link_type, equi7tile, s3_utils, flowfile=True)
         item.add_asset(asset_id, asset)
-    if thumbnail_key:
-        asset_id = "thumbnail"
-        asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, thumbnail_key, link_type),
-            media_type="image/png",
-            roles=["thumbnail"],
-            title=f"{equi7tiles_list[0]} thumbnail"
-        )
         item.add_asset(asset_id, asset)
+
     for equi7tile in equi7tiles_list:
         tile_asset_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, [equi7tile])
         equi7tile_assets[equi7tile] = []

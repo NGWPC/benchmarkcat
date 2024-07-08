@@ -1,0 +1,401 @@
+{
+  "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150316T235500_20150316T235525_005064_0065C2_6FB7/": {
+    "flowfile_object": {
+      "NWM_v3_flowfile": {
+        "Flowstats": {
+          "discharge": {
+            "Min": 0.0,
+            "Max": 23391.949477149174,
+            "Mean": 706.8805616647766
+          }
+        },
+        "columns": {
+          "feature_id": {
+            "Column description": "feature id that identifies the stream segment being modeled or measured",
+            "Column data source": "NWM 3.0 hydrofabric",
+            "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
+          },
+          "discharge": {
+            "Column description": "Discharge in m^3/s",
+            "Column data source": "NWM 3.0 retrospective discharge data",
+            "data_href": "https://registry.opendata.aws/nwm-archive/"
+          }
+        }
+      }
+    },
+    "flowfile_key": [
+      "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150316T235500_20150316T235525_005064_0065C2_6FB7/nwm_retrospective_flows_v3.csv"
+    ],
+    "thumbnail_key": "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150316T235500_20150316T235525_005064_0065C2_6FB7/E087N030T3_extent_thumbnail.png",
+    "main_cause": "Heavy Rain",
+    "geometry": {
+      "type": "MultiPolygon",
+      "coordinates": [
+        [
+          [
+            [
+              -88.064193,
+              37.250515
+            ],
+            [
+              -86.650633824928,
+              37.88266439976655
+            ],
+            [
+              -86.60010381354867,
+              37.9052616259223
+            ],
+            [
+              -86.56352426949549,
+              37.92162014647435
+            ],
+            [
+              -86.51109305205658,
+              37.94506759969565
+            ],
+            [
+              -86.26499359980708,
+              38.05512427349176
+            ],
+            [
+              -85.83807485120387,
+              38.246044070439666
+            ],
+            [
+              -85.76693098872208,
+              38.277859894466026
+            ],
+            [
+              -85.738304,
+              38.290662
+            ],
+            [
+              -85.71742348121714,
+              38.27938554517631
+            ],
+            [
+              -84.451643,
+              37.595805
+            ],
+            [
+              -84.352669,
+              36.752785
+            ],
+            [
+              -84.89845958219814,
+              36.60914149454564
+            ],
+            [
+              -88.11368,
+              35.762946
+            ],
+            [
+              -88.08922884657119,
+              36.49794262244543
+            ],
+            [
+              -88.064193,
+              37.250515
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -90.63588,
+              36.443302
+            ],
+            [
+              -87.777802,
+              36.849236
+            ],
+            [
+              -87.473068,
+              35.346924
+            ],
+            [
+              -90.277191,
+              34.939114
+            ],
+            [
+              -90.63588,
+              36.443302
+            ]
+          ]
+        ]
+      ]
+    },
+    "bbox": [
+      -90.63588,
+      34.939114,
+      -84.352669,
+      38.290662
+    ]
+  },
+  "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150316T235525_20150316T235550_005064_0065C2_6527/": {
+    "flowfile_object": {
+      "NWM_v3_flowfile": {
+        "Flowstats": {
+          "discharge": {
+            "Min": 0.0,
+            "Max": 24010.559463322163,
+            "Mean": 1251.1780510425112
+          }
+        },
+        "columns": {
+          "feature_id": {
+            "Column description": "feature id that identifies the stream segment being modeled or measured",
+            "Column data source": "NWM 3.0 hydrofabric",
+            "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
+          },
+          "discharge": {
+            "Column description": "Discharge in m^3/s",
+            "Column data source": "NWM 3.0 retrospective discharge data",
+            "data_href": "https://registry.opendata.aws/nwm-archive/"
+          }
+        }
+      }
+    },
+    "flowfile_key": [
+      "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150316T235525_20150316T235550_005064_0065C2_6527/nwm_retrospective_flows_v3.csv"
+    ],
+    "thumbnail_key": "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150316T235525_20150316T235550_005064_0065C2_6527/E087N030T3_extent_thumbnail.png",
+    "main_cause": "Heavy Rain",
+    "geometry": {
+      "type": "MultiPolygon",
+      "coordinates": [
+        [
+          [
+            [
+              -88.064193,
+              37.250515
+            ],
+            [
+              -86.650633824928,
+              37.88266439976655
+            ],
+            [
+              -86.60010381354867,
+              37.9052616259223
+            ],
+            [
+              -86.56352426949549,
+              37.92162014647435
+            ],
+            [
+              -86.51109305205658,
+              37.94506759969565
+            ],
+            [
+              -86.26499359980708,
+              38.05512427349176
+            ],
+            [
+              -85.83807485120387,
+              38.246044070439666
+            ],
+            [
+              -85.76693098872208,
+              38.277859894466026
+            ],
+            [
+              -85.738304,
+              38.290662
+            ],
+            [
+              -85.71742348121714,
+              38.27938554517631
+            ],
+            [
+              -84.451643,
+              37.595805
+            ],
+            [
+              -84.352669,
+              36.752785
+            ],
+            [
+              -84.89845958219814,
+              36.60914149454564
+            ],
+            [
+              -88.11368,
+              35.762946
+            ],
+            [
+              -88.08922884657119,
+              36.49794262244543
+            ],
+            [
+              -88.064193,
+              37.250515
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -90.99955,
+              37.947021
+            ],
+            [
+              -88.082405,
+              38.351387
+            ],
+            [
+              -87.776711,
+              36.849468
+            ],
+            [
+              -90.635902,
+              36.44339
+            ],
+            [
+              -90.99955,
+              37.947021
+            ]
+          ]
+        ]
+      ]
+    },
+    "bbox": [
+      -90.99955,
+      35.762946,
+      -84.352669,
+      38.351387
+    ]
+  },
+  "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150318T233912_20150318T233937_005093_006675_9624/": {
+    "flowfile_object": {
+      "NWM_v3_flowfile": {
+        "Flowstats": {
+          "discharge": {
+            "Min": 0.0,
+            "Max": 14010.98968682997,
+            "Mean": 1553.8669410259424
+          }
+        },
+        "columns": {
+          "feature_id": {
+            "Column description": "feature id that identifies the stream segment being modeled or measured",
+            "Column data source": "NWM 3.0 hydrofabric",
+            "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
+          },
+          "discharge": {
+            "Column description": "Discharge in m^3/s",
+            "Column data source": "NWM 3.0 retrospective discharge data",
+            "data_href": "https://registry.opendata.aws/nwm-archive/"
+          }
+        }
+      }
+    },
+    "flowfile_key": [
+      "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150318T233912_20150318T233937_005093_006675_9624/nwm_retrospective_flows_v3.csv"
+    ],
+    "thumbnail_key": "benchmark/rs/gfm/4230/S1A_IW_GRDH_1SDV_20150318T233912_20150318T233937_005093_006675_9624/E090N033T3_extent_thumbnail.png",
+    "main_cause": "Heavy Rain",
+    "geometry": {
+      "type": "MultiPolygon",
+      "coordinates": [
+        [
+          [
+            [
+              -88.064193,
+              37.250515
+            ],
+            [
+              -86.650633824928,
+              37.88266439976655
+            ],
+            [
+              -86.60010381354867,
+              37.9052616259223
+            ],
+            [
+              -86.56352426949549,
+              37.92162014647435
+            ],
+            [
+              -86.51109305205658,
+              37.94506759969565
+            ],
+            [
+              -86.26499359980708,
+              38.05512427349176
+            ],
+            [
+              -85.83807485120387,
+              38.246044070439666
+            ],
+            [
+              -85.76693098872208,
+              38.277859894466026
+            ],
+            [
+              -85.738304,
+              38.290662
+            ],
+            [
+              -85.71742348121714,
+              38.27938554517631
+            ],
+            [
+              -84.451643,
+              37.595805
+            ],
+            [
+              -84.352669,
+              36.752785
+            ],
+            [
+              -84.89845958219814,
+              36.60914149454564
+            ],
+            [
+              -88.11368,
+              35.762946
+            ],
+            [
+              -88.08922884657119,
+              36.49794262244543
+            ],
+            [
+              -88.064193,
+              37.250515
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -87.110847,
+              38.821423
+            ],
+            [
+              -84.205559,
+              39.21928
+            ],
+            [
+              -83.894577,
+              37.717899
+            ],
+            [
+              -86.740341,
+              37.318607
+            ],
+            [
+              -87.110847,
+              38.821423
+            ]
+          ]
+        ]
+      ]
+    },
+    "bbox": [
+      -88.11368,
+      35.762946,
+      -83.894577,
+      39.21928
+    ]
+  }
+}
