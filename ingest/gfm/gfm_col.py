@@ -1,6 +1,5 @@
 import argparse
 import geopandas as gpd
-import pdb
 import pandas as pd
 import boto3
 import os
@@ -14,7 +13,8 @@ from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.summaries import Summaries
 from botocore.exceptions import NoCredentialsError, ClientError
 
-from ingest.gfm.gfm_stac import GFMGeometryCreator,SentinelName, AssetUtils, GFMInfo
+from ingest.gfm.gfm_handle_assets import GFMAssetHandler
+from ingest.gfm.gfm_stac import GFMGeometryCreator, SentinelName, AssetUtils, GFMInfo
 from ingest.bench import S3Utils, FlowfileUtils  
 
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +30,7 @@ def parse_arguments():
     parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
     parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
     parser.add_argument('--asset_object_key', type=str, default='benchmark/rs/', help='Key for the asset object in the S3 bucket')
+    parser.add_argument('--reprocess_assets', type=str, default='False', help='Set to true to reprocess assets using GFMAssetHandler')
     return parser.parse_args()
 
 def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
@@ -71,36 +72,37 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
 
     return collection
 
-def download_geopackage(s3, bucket_name, geo_package_key, local_path):
-    s3.download_file(bucket_name, geo_package_key, local_path)
-
-def load_geopackage(local_path):
-    return gpd.read_file(local_path)
-
 def get_dfo_events(s3_utils, bucket_name, asset_object_key):
     return s3_utils.list_subdirectories(bucket_name, f"{asset_object_key}gfm/")
 
-def process_event(dfo_path, s3_utils, bucket_name, link_type, gdf, collection):
+def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reprocess_assets):
     event_id = dfo_path.strip('/').split('/')[-1]
     logging.info(f"Indexing DFO event: {event_id}")
     
     sent_ti_list = s3_utils.list_subdirectories(bucket_name, dfo_path)
     for sent_ti_path in sent_ti_list:
-        process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, gdf, collection)
+        process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets)
 
-def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, gdf, collection):
-    thumbnail_created = False
+def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets):
     sent_ti = sent_ti_path.strip('/').split('/')[-1]
-    geom_processor = GFMGeometryCreator(bucket_name=bucket_name, s3_client=s3_utils.s3_client, gdf=gdf)
-    geometry, bbox = geom_processor.make_item_geom(s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['footprint']), int(event_id))
+    equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['OBSWATER']) if len(os.path.basename(filename).split('_')) > 2]
 
     gfm_version, orbit_state, abs_orbit_num = get_orbit_info(sent_ti_path, s3_utils, bucket_name)
     start_datetime, end_datetime = SentinelName.extract_datetimes(sent_ti)
-    dfo_start_datetime, dfo_end_datetime = get_event_datetimes(gdf, event_id)
-    flowfile_object, flowfile_key = get_flowfile_object(sent_ti_path, s3_utils, bucket_name)
-    main_cause = gdf.loc[gdf['dfo_id'] == int(event_id), 'maincause'].values[0]
-    item = create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime,end_datetime, orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object)
-    add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thumbnail_created,flowfile_key)
+
+    asset_handler = GFMAssetHandler(s3_utils, bucket_name)
+    if asset_handler.tile_assets_processed(sent_ti_path) and reprocess_assets == 'False':
+        asset_results = asset_handler.read_data_json(sent_ti_path)
+    else:
+        asset_results = asset_handler.handle_assets(sent_ti_path, event_id)
+
+    geometry = asset_results["geometry"]
+    bbox = asset_results["bbox"]
+    flowfile_object = asset_results["flowfile_object"]
+    main_cause = asset_results["main_cause"]
+
+    item = create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, end_datetime, orbit_state, abs_orbit_num, gfm_version, flowfile_object)
+    add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, asset_results["thumbnail_key"], asset_results["flowfile_key"])
 
     collection.add_item(item)
 
@@ -117,25 +119,7 @@ def get_orbit_info(sent_ti_path, s3_utils, bucket_name):
     abs_orbit_num = SentinelName.extract_orbit_number(sent_ti_path)
     return gfm_version, orbit_state, abs_orbit_num
 
-def get_event_datetimes(gdf, event_id):
-    event_row = gdf[gdf['dfo_id'] == int(event_id)]
-    dfo_start_datetime = pd.to_datetime(event_row['began'].values[0]).replace(tzinfo=timezone.utc)
-    dfo_end_datetime = pd.to_datetime(event_row['ended'].values[0]).replace(tzinfo=timezone.utc)
-    return dfo_start_datetime, dfo_end_datetime
-
-def get_flowfile_object(sent_ti_path, s3_utils, bucket_name):
-    flowfile_key = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['flows'])
-    if flowfile_key:
-        flowfile_df = FlowfileUtils.download_flowfile(bucket_name, flowfile_key[0], s3_utils.s3_client)
-        flowstats = FlowfileUtils.extract_flowstats(flowfile_df)
-        flowfile_ids = ["NWM_v3_flowfile"]
-        return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, GFMInfo.columns_list), flowfile_key
-    else:
-        logging.warning("No flowfile detected")
-        flowfile_key = None
-        return None, flowfile_key
-
-def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, end_datetime,orbit_state, abs_orbit_num, gfm_version, dfo_start_datetime, dfo_end_datetime, flowfile_object):
+def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, end_datetime, orbit_state, abs_orbit_num, gfm_version, flowfile_object):
     return pystac.Item(
         id=f"DFO-{event_id}_tile-{sent_ti}",
         geometry=geometry,
@@ -150,8 +134,6 @@ def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, e
             "gfm_data_take_start_datetime": start_datetime.isoformat(),  
             "gfm_data_take_end_datetime": end_datetime.isoformat(),
             "dfo_event_id": event_id,
-            "dfo_start_datetime": dfo_start_datetime.isoformat(),
-            "dfo_end_datetime": dfo_end_datetime.isoformat(),
             "proj:epsg": 27705,
             "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',	
             "gsd": 20,
@@ -160,14 +142,21 @@ def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, e
         }
     )
 
-def add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thumbnail_created, flowfile_key):
-    equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['OBSWATER']) if len(os.path.basename(filename).split('_')) > 2]
+def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, thumbnail_key, flowfile_key):
     equi7tile_assets = {}
     if flowfile_key:
         equi7tile = None
-        asset_id, asset = create_asset(flowfile_key, bucket_name, link_type, equi7tile, s3_utils, flowfile = True)
+        asset_id, asset = create_asset(flowfile_key[0], bucket_name, link_type, equi7tile, s3_utils, flowfile=True)
         item.add_asset(asset_id, asset)
-
+    if thumbnail_key:
+        asset_id = "thumbnail"
+        asset = pystac.Asset(
+            href=s3_utils.generate_href(bucket_name, thumbnail_key, link_type),
+            media_type="image/png",
+            roles=["thumbnail"],
+            title=f"{equi7tiles_list[0]} thumbnail"
+        )
+        item.add_asset(asset_id, asset)
     for equi7tile in equi7tiles_list:
         tile_asset_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, [equi7tile])
         equi7tile_assets[equi7tile] = []
@@ -177,17 +166,13 @@ def add_assets_to_item(item, sent_ti_path, s3_utils, bucket_name, link_type, thu
             equi7tile_assets[equi7tile].append(asset_id)
             item.add_asset(asset_id, asset)
 
-            if not thumbnail_created and "Observed Water Extent" in asset.title:
-                create_and_add_thumbnail(item, equi7tile, tile_asset_path, s3_utils, bucket_name, link_type)
-                thumbnail_created = True
-
     item.properties['equi7tile_assets'] = equi7tile_assets
 
-def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils,flowfile=False):
+def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfile=False):
     if flowfile:
         asset_id = "NWM_v3_flowfile"
         asset = pystac.Asset(
-            href = s3_utils.generate_href(bucket_name, asset_path, link_type),
+            href=s3_utils.generate_href(bucket_name, asset_path, link_type),
             roles=["data"],
             description="NWM 3.0 flowfile see flowfiles key in properties for more information"
         )
@@ -205,34 +190,14 @@ def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils,flowfil
         )
     return asset_id, asset
 
-def create_and_add_thumbnail(item, equi7tile, tile_asset_path, s3_utils, bucket_name, link_type):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        local_extent_path = os.path.join(tmpdir, f'{equi7tile}_extent.tif')
-        local_thumbnail_path = os.path.join(tmpdir, f'{equi7tile}_extent_thumbnail.png')
-        thumbnail_s3_path = s3_utils.make_and_upload_thumbnail(local_extent_path, local_thumbnail_path, bucket_name, tile_asset_path)
-        
-        item.add_asset(
-            f"{equi7tile}_thumbnail",
-            pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, thumbnail_s3_path, link_type),
-                media_type="image/png",
-                roles=["thumbnail"],
-                title=f"{equi7tile} thumbnail"
-            )
-        )
-
 def main():
     args = parse_arguments()
     s3_utils = initialize_s3_utils() 
     
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
-    local_geopackage_path = '/tmp/dfo_all_usa_events_post_2015.gpkg'
-    download_geopackage(s3_utils.s3_client, args.bucket_name, 'benchmark/rs/dfo_all_usa_events_post_2015.gpkg', local_geopackage_path)
-    gdf = load_geopackage(local_geopackage_path)
-    
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
     for dfo_event in dfo_events:
-        process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, gdf, collection)
+        process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, collection, args.reprocess_assets)
 
     s3_utils.update_collection(collection, 'gfm-collection', args.catalog_path, args.bucket_name)
     collection.validate()

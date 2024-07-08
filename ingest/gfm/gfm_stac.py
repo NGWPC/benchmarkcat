@@ -153,18 +153,17 @@ class AssetUtils:
         return media_types.get(ext, "application/octet-stream")
 
 class GFMGeometryCreator:
-    def __init__(self, bucket_name: str, s3_client, gdf: gpd.GeoDataFrame):
+    def __init__(self, bucket_name: str, s3_client, gdf_geom):
         self.bucket_name = bucket_name
         self.s3_client = s3_client
-        self.gdf = gdf
+        self.gdf_geom = gdf_geom
         self.transformer = Transformer.from_crs('EPSG:4326', 'EPSG:4326', always_xy=True)
         self.geojson_handler = GeoJSONHandler(self.transformer)
 
-    def make_item_geom(self, keys: List[str], dfo_id: int) -> Tuple[dict, List[float]]:
+    def make_item_geom(self, keys: List[str]) -> Tuple[dict, List[float]]:
         geojson_geometries = []
 
-        gdf_geom = self.gdf[self.gdf['dfo_id'] == dfo_id].geometry.values[0]
-        geojson_geometries.append(gdf_geom)
+        geojson_geometries.append(self.gdf_geom)
 
         for key in keys:
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
@@ -174,7 +173,7 @@ class GFMGeometryCreator:
 
         return self.geojson_handler.combine_geometries(geojson_geometries)
 
-####### Encoded data specific to the gfm collection #######
+####### Encoded data specific to the gfm collection not derived by asset handling #######
 class GFMInfo:
     # Add list of item assets
     assets = {
