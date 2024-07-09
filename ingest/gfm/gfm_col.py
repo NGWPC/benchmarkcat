@@ -3,7 +3,6 @@ import geopandas as gpd
 import pandas as pd
 import boto3
 import os
-import tempfile
 import logging
 from datetime import datetime, timezone
 import pystac
@@ -75,24 +74,23 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
 def get_dfo_events(s3_utils, bucket_name, asset_object_key):
     return s3_utils.list_subdirectories(bucket_name, f"{asset_object_key}gfm/")
 
-def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reprocess_assets):
+def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler):
     event_id = dfo_path.strip('/').split('/')[-1]
     logging.info(f"Indexing DFO event: {event_id}")
     
     sent_ti_list = s3_utils.list_subdirectories(bucket_name, dfo_path)
     for sent_ti_path in sent_ti_list:
-        process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets)
+        process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler)
 
-def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets):
+def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler):
     sent_ti = sent_ti_path.strip('/').split('/')[-1]
     equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['OBSWATER']) if len(os.path.basename(filename).split('_')) > 2]
 
     gfm_version, orbit_state, abs_orbit_num = get_orbit_info(sent_ti_path, s3_utils, bucket_name)
     start_datetime, end_datetime = SentinelName.extract_datetimes(sent_ti)
 
-    asset_handler = GFMAssetHandler(s3_utils, bucket_name)
     if asset_handler.tile_assets_processed(sent_ti_path) and reprocess_assets == 'False':
-        asset_results = asset_handler.read_data_json(sent_ti_path)
+        asset_results = asset_handler.read_data_parquet(sent_ti_path)
     else:
         asset_results = asset_handler.handle_assets(sent_ti_path, event_id)
 
@@ -195,8 +193,9 @@ def main():
     
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
+    asset_handler = GFMAssetHandler(s3_utils, args.bucket_name)
     for dfo_event in dfo_events:
-        process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, collection, args.reprocess_assets)
+        process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, collection, args.reprocess_assets, asset_handler)
 
     s3_utils.update_collection(collection, 'gfm-collection', args.catalog_path, args.bucket_name)
     collection.validate()

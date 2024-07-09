@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timezone
 import pystac
 from pystac.extensions.item_assets import AssetDefinition
-from typing import List, Tuple, Dict, Union
+from typing import List, Tuple, Union
 from pyproj import Transformer
 import geopandas as gpd
 
