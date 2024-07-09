@@ -1,3 +1,4 @@
+import pdb
 import argparse
 import geopandas as gpd
 import pandas as pd
@@ -108,6 +109,7 @@ def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, colle
 
     collection.add_item(item)
 
+
 def get_orbit_info(sent_ti_path, s3_utils, bucket_name):
     advflag_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['ADVFLAG'])
     if advflag_list:
@@ -149,7 +151,7 @@ def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_nam
     equi7tile_assets = {}
     if flowfile_key:
         equi7tile = None
-        asset_id, asset = create_asset(flowfile_key[0], bucket_name, link_type, equi7tile, s3_utils, flowfile=True)
+        asset_id, asset = create_asset(flowfile_key, bucket_name, link_type, equi7tile, s3_utils, flowfile=True)
         item.add_asset(asset_id, asset)
 
     for equi7tile in equi7tiles_list:

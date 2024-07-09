@@ -18,6 +18,7 @@ import os
 import pystac
 from ingest.bench import S3Utils
 import boto3
+import pdb
 from urllib.parse import urlparse
 
 def parse_arguments():
@@ -34,9 +35,8 @@ def extract_s3_info(href):
     parsed_url = urlparse(href)
     if parsed_url.scheme == "s3":
         path = parsed_url.path.lstrip('/')
-        bucket_name, *key_parts = path.split('/', 1)
-        key = key_parts[0] if key_parts else ''
-        return bucket_name, key
+        bucket_name = parsed_url.netloc
+        return bucket_name, path
     elif parsed_url.scheme in ["http", "https"] and ".s3.amazonaws.com" in parsed_url.netloc:
         path = parsed_url.path.lstrip('/')
         bucket_name = parsed_url.netloc.split(".s3.amazonaws.com")[0]
@@ -48,6 +48,9 @@ def update_asset_hrefs(catalog, s3_utils, link_type):
         for asset_key, asset in item.assets.items():
             try:
                 bucket_name, path = extract_s3_info(asset.href)
+                # pdb.set_trace()
+                print(f"making link for bucket: {bucket_name} and path key: {path}")
+                # pdb.set_trace()
                 new_href = s3_utils.generate_href(bucket_name, path, link_type)
                 asset.href = new_href
                 print(f"Updated asset href for {asset_key}: {new_href}")
@@ -58,8 +61,8 @@ def update_asset_hrefs(catalog, s3_utils, link_type):
 
 def main():
     args = parse_arguments()
-    
-    s3_client = boto3.client('s3')
+    session = boto3.Session(profile_name='SoftwareEngineersFull-218573839066')
+    s3_client = session.client('s3')
     s3_utils = S3Utils(s3_client)
 
     catalog = load_catalog(args.cat_dir)
