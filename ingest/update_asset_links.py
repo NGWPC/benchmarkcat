@@ -18,6 +18,7 @@ import os
 import pystac
 from ingest.bench import S3Utils
 import boto3
+from urllib.parse import urlparse
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -30,16 +31,16 @@ def load_catalog(cat_dir):
     return catalog
 
 def extract_s3_info(href):
-    if href.startswith("s3://"):
-        path = href[5:]
+    parsed_url = urlparse(href)
+    if parsed_url.scheme == "s3":
+        path = parsed_url.path.lstrip('/')
         bucket_name, *key_parts = path.split('/', 1)
         key = key_parts[0] if key_parts else ''
         return bucket_name, key
-    elif href.startswith("http://") or href.startswith("https://"):
-        if ".s3.amazonaws.com/" in href:
-            path = href.split(".s3.amazonaws.com/")[1]
-            bucket_name = href.split("//")[1].split(".s3.amazonaws.com")[0]
-            return bucket_name, path
+    elif parsed_url.scheme in ["http", "https"] and ".s3.amazonaws.com" in parsed_url.netloc:
+        path = parsed_url.path.lstrip('/')
+        bucket_name = parsed_url.netloc.split(".s3.amazonaws.com")[0]
+        return bucket_name, path
     raise ValueError(f"Unsupported S3 href format: {href}")
 
 def update_asset_hrefs(catalog, s3_utils, link_type):
