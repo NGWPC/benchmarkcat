@@ -51,10 +51,13 @@ class GFMAssetHandler:
         row = self.results_df[self.results_df['sent_ti_path'] == sent_ti_path]
         if not row.empty:
             result = row.to_dict(orient='records')[0]
-            # Convert JSON strings back to objects
-            result['geometry'] = json.loads(result['geometry'])
-            result['bbox'] = json.loads(result['bbox'])
-            result['flowfile_object'] = json.loads(result['flowfile_object'])  # Convert back to dict
+            # Convert JSON strings back to objects if not empty
+            if result.get('geometry'):
+                result['geometry'] = json.loads(result['geometry'])
+            if result.get('bbox'):
+                result['bbox'] = json.loads(result['bbox'])
+            if result.get('flowfile_object'):
+                result['flowfile_object'] = json.loads(result['flowfile_object'])
             print(f"read tile {sent_ti_path}")
             return result
         return {}
