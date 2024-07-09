@@ -4,3 +4,4 @@ TestData/
 __pycache__
 
 .aider*
+*.parquet

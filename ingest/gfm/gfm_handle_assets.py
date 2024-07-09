@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import timezone
 import geopandas as gpd
 from shapely.geometry import mapping, shape
-from ingest.gfm.gfm_stac import GFMInfo, GFMGeometryCreator 
+from ingest.gfm.gfm_stac import GFMInfo, GFMGeometryCreator
 from ingest.bench import FlowfileUtils
 from typing import Dict
 import copy
@@ -17,17 +17,27 @@ class GFMAssetHandler:
     This is a class that exists to create a separation of concerns between metadata and data. Doing this to avoid having to reprocess data that has already been processed when you recreate your collection/collections.
     """
 
-    def __init__(self, s3_utils, bucket_name, results_file="gfm_collection.parquet") -> None:
+    def __init__(self, s3_utils, bucket_name, derived_metadata_path, results_file="gfm_collection.parquet") -> None:
         self.s3_utils = s3_utils
         self.bucket_name = bucket_name
+        self.derived_metadata_path = derived_metadata_path
         self.results_file = results_file
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.results_file = os.path.join(script_dir, results_file)
+        self.local_results_file = os.path.join(script_dir, results_file)
         self.results_df = self.load_results()
 
     def load_results(self):
-        if os.path.exists(self.results_file):
-            df = pd.read_parquet(self.results_file)
+        try:
+            # Attempt to download the Parquet file from S3
+            self.s3_utils.s3_client.download_file(self.bucket_name, self.derived_metadata_path, self.local_results_file)
+            logging.info(f"Successfully downloaded {self.derived_metadata_path} from s3://{self.bucket_name}/{self.derived_metadata_path}")
+        except Exception as e:
+            logging.warning(f"Failed to download {self.derived_metadata_path} from s3://{self.bucket_name}/{self.derived_metadata_path}: {e}")
+            logging.info("Creating a new local results file.")
+
+        # Check if the local results file exists and load it, otherwise create a new DataFrame
+        if os.path.exists(self.local_results_file):
+            df = pd.read_parquet(self.local_results_file)
             if 'sent_ti_path' not in df.columns:
                 df['sent_ti_path'] = None
             return df
@@ -128,8 +138,8 @@ class GFMAssetHandler:
         # Concatenate the new data
         self.results_df = pd.concat([self.results_df, new_df], ignore_index=True)
         
-        # Write the updated DataFrame to the Parquet file
-        self.results_df.to_parquet(self.results_file, index=False)
+        # Write the updated DataFrame to the local Parquet file
+        self.results_df.to_parquet(self.local_results_file, index=False)
 
     def process_geopackage(self, event_id):
         local_geopackage_path = '/tmp/dfo_all_usa_events_post_2015.gpkg'    
@@ -150,3 +160,17 @@ class GFMAssetHandler:
         dfo_start_datetime = pd.to_datetime(event_row['began'].values[0]).replace(tzinfo=timezone.utc)
         dfo_end_datetime = pd.to_datetime(event_row['ended'].values[0]).replace(tzinfo=timezone.utc)
         return dfo_start_datetime, dfo_end_datetime
+
+    def upload_modified_parquet(self):
+        try:
+            # Upload the local Parquet file back to S3
+            self.s3_utils.s3_client.upload_file(self.local_results_file, self.bucket_name, self.derived_metadata_path)
+            logging.info(f"Successfully uploaded {self.local_results_file} to s3://{self.bucket_name}/{self.derived_metadata_path}")
+        except Exception as e:
+            logging.error(f"Failed to upload {self.local_results_file} to s3://{self.bucket_name}/{self.derived_metadata_path}: {e}")
+        finally:
+            # Remove the local Parquet file
+            if os.path.exists(self.local_results_file):
+                os.remove(self.local_results_file)
+                logging.info(f"Removed local file {self.local_results_file}")
+

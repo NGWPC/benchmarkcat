@@ -8,13 +8,11 @@ from datetime import datetime, timezone
 import pystac
 from pystac.extensions.sat import SatExtension
 from pystac.extensions.projection import ProjectionExtension
-from pystac.extensions.item_assets import ItemAssetsExtension 
+from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.summaries import Summaries
-from pystac.extensions.sat import SatExtension
-from pystac.extensions.projection import ProjectionExtension
 from ingest.gfm.gfm_handle_assets import GFMAssetHandler
 from ingest.gfm.gfm_stac import SentinelName, AssetUtils, GFMInfo
-from ingest.bench import S3Utils 
+from ingest.bench import S3Utils
 
 logging.basicConfig(level=logging.INFO)
 
@@ -30,6 +28,7 @@ def parse_arguments():
     parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
     parser.add_argument('--asset_object_key', type=str, default='benchmark/rs/', help='Key for the asset object in the S3 bucket')
     parser.add_argument('--reprocess_assets', type=str, default='False', help='Set to true to reprocess assets using GFMAssetHandler')
+    parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet', help='S3 key for the derived metadata Parquet file created by asset handling code.')
     return parser.parse_args()
 
 def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
@@ -152,7 +151,6 @@ def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_nam
         equi7tile = None
         asset_id, asset = create_asset(flowfile_key[0], bucket_name, link_type, equi7tile, s3_utils, flowfile=True)
         item.add_asset(asset_id, asset)
-        item.add_asset(asset_id, asset)
 
     for equi7tile in equi7tiles_list:
         tile_asset_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, [equi7tile])
@@ -189,16 +187,19 @@ def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfi
 
 def main():
     args = parse_arguments()
-    s3_utils = initialize_s3_utils() 
+    s3_utils = initialize_s3_utils()
     
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
-    asset_handler = GFMAssetHandler(s3_utils, args.bucket_name)
+    asset_handler = GFMAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
     for dfo_event in dfo_events:
         process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, collection, args.reprocess_assets, asset_handler)
 
     s3_utils.update_collection(collection, 'gfm-collection', args.catalog_path, args.bucket_name)
     collection.validate()
+
+    # Upload the modified Parquet file of asset handler output back to S3 and delete local copy
+    asset_handler.upload_modified_parquet()
 
 if __name__ == "__main__":
     main()
