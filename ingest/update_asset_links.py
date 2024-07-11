@@ -61,9 +61,8 @@ def update_asset_hrefs(catalog, s3_utils, link_type):
 
 def main():
     args = parse_arguments()
-    session = boto3.Session(profile_name='SoftwareEngineersFull-218573839066')
-    s3_client = session.client('s3')
-    s3_utils = S3Utils(s3_client)
+    s3 = boto3.client('s3')
+    s3_utils = S3Utils(s3)
 
     catalog = load_catalog(args.cat_dir)
     update_asset_hrefs(catalog, s3_utils, args.link_type)
