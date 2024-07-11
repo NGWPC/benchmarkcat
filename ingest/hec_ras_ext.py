@@ -5,14 +5,14 @@ from pystac.extensions.base import PropertiesExtension, ExtensionManagementMixin
 
 # Define constants for the USGS-FIM extension
 homedir = os.path.expanduser("~")
-SCHEMA_URI: str = f"file://{homedir}/benchmarkcat/schemas/usgs_fim/v1.0.0/usgs_fim.json"
-PREFIX: str = "usgs_fim:"
+SCHEMA_URI: str = f"file://{homedir}/benchmarkcat/schemas/hec_ras/v1.0.0/hec_ras.json"
+PREFIX: str = "hec-ras:"
 
-class USGSFIMExtension(
+class HECRASExtension(
     PropertiesExtension, 
     ExtensionManagementMixin[Union[pystac.Item, pystac.Collection]]
 ):
-    name: Literal["usgs_fim"] = "usgs_fim"
+    name: Literal["hec-ras"] = "hec-ras"
 
     def __init__(self, item: pystac.Item) -> None:
         self.item = item
@@ -181,13 +181,13 @@ class USGSFIMExtension(
         return SCHEMA_URI
 
     @classmethod
-    def ext(cls, obj: Union[pystac.Item, pystac.Collection], add_if_missing: bool = True) -> "USGSFIMExtension":
+    def ext(cls, obj: Union[pystac.Item, pystac.Collection], add_if_missing: bool = True) -> "HECRASExtension":
         if isinstance(obj, (pystac.Item, pystac.Collection)):
             cls.ensure_has_extension(obj, add_if_missing)
-            return USGSFIMExtension(obj)
+            return HECRASExtension(obj)
         else:
             raise pystac.ExtensionTypeError(
-                f"USGSFIMExtension does not apply to type '{type(obj).__name__}'"
+                f"HECRASExtension does not apply to type '{type(obj).__name__}'"
             )
 
 if __name__ == "__main__":
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     item = pystac.read_file("https://raw.githubusercontent.com/radiantearth/stac-spec/master/examples/core-item.json")
     print("Item properties before applying extension:", item.properties)
     
-    usgs_fim_ext = USGSFIMExtension.ext(item, add_if_missing=True)
+    usgs_fim_ext = HECRASExtension.ext(item, add_if_missing=True)
     usgs_fim_ext.apply(
         huc8=12345678,
         gauge="ABCD1",
@@ -226,5 +226,5 @@ if __name__ == "__main__":
     )
 
     print("Item properties after applying extension:", item.properties)
-    print("Schema URI:", USGSFIMExtension.get_schema_uri())
-    print("Implements Extension:", USGSFIMExtension.has_extension(item))
+    print("Schema URI:", HECRASExtension.get_schema_uri())
+    print("Implements Extension:", HECRASExtension.has_extension(item))
