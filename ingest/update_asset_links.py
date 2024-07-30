@@ -43,21 +43,44 @@ def extract_s3_info(href):
         return bucket_name, path
     raise ValueError(f"Unsupported S3 href format: {href}")
 
-def update_asset_hrefs(catalog, s3_utils, link_type):
-    for item in catalog.get_all_items():
-        for asset_key, asset in item.assets.items():
+def update_hrefs(stac_object, s3_utils, link_type):
+    # Update asset HREFs
+    if isinstance(stac_object, pystac.Item):
+        for asset_key, asset in stac_object.assets.items():
             try:
                 bucket_name, path = extract_s3_info(asset.href)
-                # pdb.set_trace()
-                print(f"making link for bucket: {bucket_name} and path key: {path}")
-                # pdb.set_trace()
                 new_href = s3_utils.generate_href(bucket_name, path, link_type)
                 asset.href = new_href
                 print(f"Updated asset href for {asset_key}: {new_href}")
             except ValueError as e:
                 print(f"Error updating asset {asset_key}: {e}")
-        # Save the updated item back to its original location
-        item.save_object()
+    
+    # Update link HREFs
+    for link in stac_object.links:
+        pdb.set_trace()
+        if link.href and (link.href.startswith("s3://") or link.href.startswith("https://")):
+            try:
+                bucket_name, path = extract_s3_info(link.href)
+                new_href = s3_utils.generate_href(bucket_name, path, link_type)
+                link.target = new_href
+                print(f"Updated link href for {link.rel}: {new_href}")
+            except ValueError as e:
+                print(f"Error updating link {link.rel}: {e}")
+
+def update_catalog_hrefs(catalog, s3_utils, link_type):
+    for root, subcatalogs, items in catalog.walk():
+        # Update the root catalog itself
+        update_hrefs(root, s3_utils, link_type)
+        
+        # Update all subcatalogs
+        for subcatalog in subcatalogs:
+            update_hrefs(subcatalog, s3_utils, link_type)
+        
+        # Update all items
+        for item in items:
+            update_hrefs(item, s3_utils, link_type)
+            # Save the updated item back to its original location
+            item.save_object()
 
 def main():
     args = parse_arguments()
@@ -65,10 +88,10 @@ def main():
     s3_utils = S3Utils(s3)
 
     catalog = load_catalog(args.cat_dir)
-    update_asset_hrefs(catalog, s3_utils, args.link_type)
+    update_catalog_hrefs(catalog, s3_utils, args.link_type)
     
     # Save updated catalog inside of directory you call script 
-    catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    catalog.save(dest_href=args.cat_dir, catalog_type=pystac.CatalogType.SELF_CONTAINED)
     print(f"Catalog updated in place at {args.cat_dir}")
 
 if __name__ == "__main__":
