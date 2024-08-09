@@ -9,7 +9,7 @@ import os
 import logging
 from datetime import datetime, timezone
 import pystac
-from shapely.geometry import MultiPoint
+from shapely.geometry import MultiPoint, Point
 from pystac.extensions.projection import ProjectionExtension
 from ingest.bench import S3Utils
 from ingest.hwm.hwm_stac import create_wkt_string
@@ -72,8 +72,11 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
     for event_name, event_df in hwm_events:
             event_id = event_name
             print(f"processing {event_id}")
+            elev_points = [
+                Point(xy.x, xy.y, z) for xy, z in zip(event_df.geometry, event_df['elev_ft'])
+            ]
             # make a multipoint geometry from every row in the event df
-            geometry = MultiPoint(event_df.geometry.tolist())
+            geometry = MultiPoint(elev_points)
             # don't need to reproject any geometries from hucs or hwm gpkgs as long is they are both in egsp 4326 when imported                
             # find the bounding box of the multipoints
             bbox = geometry.bounds

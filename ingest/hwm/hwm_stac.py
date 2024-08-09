@@ -29,5 +29,7 @@ def create_wkt_string(horizontalDatumName, verticalDatumName):
     wkt = f'COMPD_CS["{horizontalDatumName} + {verticalDatumName} height",' \
           f'{horizontal_wkt},' \
           f'{vertical_wkt}]'
-    
+
+    wkt = wkt.replace('"', "'")
+
     return wkt
