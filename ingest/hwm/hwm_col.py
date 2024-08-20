@@ -50,7 +50,7 @@ def create_hwm_collection():
 
     return collection
 
-def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_key, collection):
+def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_key, top_collection):
     _, hwm_gpkg = os.path.split(asset_object_key)
     _, hucs_gpkg = os.path.split(hucs_object_key)
 
@@ -70,51 +70,71 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
         hwm_events = hwm_gdf.groupby('eventName')
 
     for event_name, event_df in hwm_events:
-            event_id = event_name
-            print(f"processing {event_id}")
-            elev_points = [
-                Point(xy.x, xy.y, z) for xy, z in zip(event_df.geometry, event_df['elev_ft'])
-            ]
-            # make a multipoint geometry from every row in the event df
-            geometry = MultiPoint(elev_points)
-            # don't need to reproject any geometries from hucs or hwm gpkgs as long is they are both in egsp 4326 when imported                
-            # find the bounding box of the multipoints
+        event_id = event_name.replace(" ", "_")
+        print(f"processing {event_id}")
+
+        # Create a sub-collection for the event
+        sub_collection = pystac.Collection(
+            id=f'{event_id}-collection',
+            description=f"Sub-collection for {event_id} event",
+            extent=pystac.Extent(
+                spatial=pystac.SpatialExtent([[-179.9, 7.2, -64.5, 61.8]]),
+                temporal=pystac.TemporalExtent([[datetime(1888, 7, 1, tzinfo=timezone.utc), datetime(2023, 7, 14)]])
+            ),
+            license='CC-BY-4.0',
+            providers=[pystac.Provider(
+                name='USGS',
+                roles=[pystac.ProviderRole.PRODUCER, pystac.ProviderRole.PROCESSOR, pystac.ProviderRole.LICENSOR],
+                description='The United States Geological Survey.',
+                url='https://www.usgs.gov'
+            )],
+        )
+
+        # Process each point in the event
+        for idx, row in event_df.iterrows():
+            point = Point(row.geometry.x, row.geometry.y, row['elev_ft'])
+            geometry = point
+
+            # find the bounding box of the point
             bbox = geometry.bounds
 
             # extract datetime from "flag_date" column and format as YYYY-MM-DDTHH:MM:SSZ
-            date_str = event_df['flag_date'].iloc[0]
-            datetime_obj = parse_date(date_str)
-            datetime_obj = datetime_obj.replace(tzinfo=timezone.utc)
+            date_str = row['flag_date']
+            datetime_obj = parse_date(date_str).replace(tzinfo=timezone.utc)
 
             # create a wkt string with the available information
             proj = create_wkt_string(
-                verticalDatumName=event_df['verticalDatumName'].iloc[0],
-                horizontalDatumName=event_df['horizontalDatumName'].iloc[0]
+                verticalDatumName=row['verticalDatumName'],
+                horizontalDatumName=row['horizontalDatumName']
             )
 
-            # lift all the other attribute table columns and put into a dictionary
+            # lift all the other attribute table columns and put into a dictionary. "latitude_dd" is just presenting latitude and longitude in a specific format. Including "latitude" and "longitude" in point properties because they might eb in a different projection than the EPSG4326 projection the gpkg all the points were pulled from are in.
             excluded_columns = [
-                "eventName","flag_date", "latitude", "longitude", "site_latitude", 
+                "eventName","flag_date", "site_latitude", 
                 "site_longitude", "files", "lat4326", "lon4326", 
-                "vertical_datums", "latitude_dd", "longitude_dd", 
+                "vertical_datums", "elev_ft", "adj_elev_ft","latitude_dd", "longitude_dd", 
                 "horizontalDatumName", "verticalDatumName","geometry"
             ]
-            prop_dict = event_df.drop(columns=excluded_columns).to_dict(orient='records')[0]
+            prop_dict = row.drop(labels=excluded_columns).to_dict()
 
             # Filter out keys with NULL (None or NaN) values
             prop_dict = {k: v for k, v in prop_dict.items() if pd.notnull(v)}
 
-            # Perform a join to find which HUC polygons the points are in
-            points_gdf = gpd.GeoDataFrame(event_df, geometry='geometry')
-            points_in_hucs = gpd.sjoin(points_gdf, hucs_gdf, how="left", predicate="within")
+            # Perform a join to find which HUC polygons the point is in
+            point_gdf = gpd.GeoDataFrame([row], geometry='geometry', crs = "EPSG:4326")
+            point_in_hucs = gpd.sjoin(point_gdf, hucs_gdf, how="left", predicate="within")
 
-            huc8_list = points_in_hucs['HUC8'].unique().tolist()
-            prop_dict['HUC8'] = huc8_list            
+            huc8_list = point_in_hucs['HUC8'].unique().tolist()
+            prop_dict['HUC8'] = huc8_list
 
-            # create a STAC item
-            item = create_item(event_id, geometry, bbox, proj, datetime_obj, prop_dict)
+            # Create a STAC item for the point
+            point_item = create_item(f"{event_id}-{idx}", geometry, bbox, proj, datetime_obj, prop_dict)
 
-            collection.add_item(item)
+            # Add the item to the event sub-collection
+            sub_collection.add_item(point_item)
+
+        # Add the sub-collection to the top-level collection
+        top_collection.add_child(sub_collection)
 
 def create_item(event_id, geometry, bbox, proj, datetime, prop_dict):
     item = pystac.Item(id=event_id,
@@ -122,6 +142,8 @@ def create_item(event_id, geometry, bbox, proj, datetime, prop_dict):
                 bbox=bbox,
                 datetime=datetime,
                 properties=prop_dict)
+    item.properties["description"] = "This STAC item documents a single point in a HWM collection documenting an event. Each point's properties contains latitude and longitude fields that should correspond tot he horizontal datum provided in the item's WKT string."
+
     # Add projection information
     proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
     proj_ext.wkt2 = proj
@@ -131,10 +153,10 @@ def main():
     args = parse_arguments()
     s3_utils = initialize_s3_utils()
     
-    collection = create_hwm_collection()
-    process_flood_events(s3_utils, args.bucket_name, args.asset_object_key, args.hucs_object_key, collection)
-    s3_utils.update_collection(collection, 'hwm-collection', args.catalog_path, args.bucket_name)
-    collection.validate()
+    top_collection = create_hwm_collection()
+    process_flood_events(s3_utils, args.bucket_name, args.asset_object_key, args.hucs_object_key, top_collection)
+    s3_utils.update_collection(top_collection, 'hwm-collection', args.catalog_path, args.bucket_name)
+    top_collection.validate()
 
 if __name__ == "__main__":
     main()
