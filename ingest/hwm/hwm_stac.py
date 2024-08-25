@@ -1,3 +1,13 @@
+# s3 paths to access flowlines and retrodata to create flowfiles 
+nwm_streams = 'hand_fim/inputs/nwm_hydrofabric/nwm_flows.gpkg'
+
+# need the bucket name for url_conus since isn't fimc-data
+url_conus = 's3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/chrtout.zarr'
+
+#place to write the hwm flowfiles too
+flowfile_dir = "/benchmark/high_water_marks/usgs/flowfiles/"
+
+# different conditions to create wkt strings for events depending on crs/datum used
 def create_wkt_string(horizontalDatumName, verticalDatumName):
     # Assuming the datum will always be some variant of WGS 84, NAD 83, NAD 27, CSRS 2017.5, or a local control point
     if "WGS84" in horizontalDatumName:
@@ -58,3 +68,17 @@ def create_wkt_string(horizontalDatumName, verticalDatumName):
     wkt = wkt.replace('"', "'")
 
     return wkt
+
+# flowfile column info
+columns_list = [{
+                "feature_id": {
+                    "Column description": "feature id that identifies the stream segment being modeled or measured",
+                    "Column data source": "NWM 3.0 hydrofabric",
+                    "data_href": "https://water.noaa.gov/resources/downloads/nwm/NWM_channel_hydrofabric.tar.gz"
+                },
+                "discharge": {
+                    "Column description": "Discharge in m^3/s",
+                    "Column data source": "NWM 3.0 retrospective discharge data",
+                    "data_href": "https://registry.opendata.aws/nwm-archive/"
+                }
+            }]

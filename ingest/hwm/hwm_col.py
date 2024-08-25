@@ -12,7 +12,9 @@ import pystac
 from shapely.geometry import MultiPoint, Point
 from pystac.extensions.projection import ProjectionExtension
 from ingest.bench import S3Utils
-from ingest.hwm.hwm_stac import create_wkt_string
+from ingest.hwm.hwm_stac import create_wkt_string, flowfile_dir
+from hwm_handle_assets import HWMAssetHandler
+
 logging.basicConfig(level=logging.INFO)
 
 def initialize_s3_utils():
@@ -22,11 +24,13 @@ def initialize_s3_utils():
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--link_type', type=str, default='uri', help='Link type, either "url" or "uri"')
     parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
     parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
     parser.add_argument('--asset_object_key', type=str, default='benchmark/high_water_marks/usgs/outputs/all_events.gpkg', help='Key for the asset object in the S3 bucket. Is a single file in the case of the HWM data.')
     parser.add_argument('--hucs_object_key', type=str, default='benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg', help='Where to download the gpkg with the huc8 info')
-    parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet', help='S3 key for the derived metadata Parquet file created by asset handling code.')
+    parser.add_argument('--reprocess_assets', type=str, default='False', help='Set to true to reprocess assets using HWMAssetHandler')
+    parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/hwm_collection.parquet', help='S3 key for the derived metadata Parquet file created by asset handling code.')
     return parser.parse_args()
 
 def create_hwm_collection():
@@ -50,7 +54,7 @@ def create_hwm_collection():
 
     return collection
 
-def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_key, top_collection):
+def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_key, link_type, asset_handler, reprocess_assets, top_collection):
     _, hwm_gpkg = os.path.split(asset_object_key)
     _, hucs_gpkg = os.path.split(hucs_object_key)
 
@@ -68,7 +72,7 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
 
         # group by event name
         hwm_events = hwm_gdf.groupby('eventName')
-
+    
     for event_name, event_df in hwm_events:
         event_id = event_name.replace(" ", "_")
         print(f"processing {event_id}")
@@ -89,7 +93,7 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
                 url='https://www.usgs.gov'
             )],
         )
-
+        pt_count = 0
         # Process each point in the event
         for idx, row in event_df.iterrows():
             point = Point(row.geometry.x, row.geometry.y, row['elev_ft'])
@@ -128,10 +132,28 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
             prop_dict['HUC8'] = huc8_list
 
             # Create a STAC item for the point
-            point_item = create_item(f"{event_id}-{idx}", geometry, bbox, proj, datetime_obj, prop_dict)
+            point_item = create_item(f"{event_id}-{pt_count}", geometry, bbox, proj, datetime_obj, prop_dict)
+            pt_count = pt_count + 1 #increment hwm id counter
 
             # Add the item to the event sub-collection
             sub_collection.add_item(point_item)
+
+        points = event_df.geometry.tolist()
+
+        # attach flowfile to collection
+        if asset_handler.event_processed(event_id) and reprocess_assets == 'False':
+            asset_results = asset_handler.read_data_parquet(event_id)
+        else:
+            asset_results = asset_handler.handle_assets(flowfile_dir, event_id, points)
+
+        sub_collection.extra_fields['flowfiles'] = asset_results["flowfile_object"] 
+        flowfile_asset = pystac.Asset(
+            href=s3_utils.generate_href(bucket_name, asset_results["flowfile_object"], link_type),
+            roles=["data"],
+            description="NWM 3.0 flowfile see flowfiles key in properties for more information"
+        )
+
+        sub_collection.add_asset(flowfile_asset)
 
         # Add the sub-collection to the top-level collection
         top_collection.add_child(sub_collection)
@@ -152,11 +174,12 @@ def create_item(event_id, geometry, bbox, proj, datetime, prop_dict):
 def main():
     args = parse_arguments()
     s3_utils = initialize_s3_utils()
-    
+    asset_handler = HWMAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
     top_collection = create_hwm_collection()
-    process_flood_events(s3_utils, args.bucket_name, args.asset_object_key, args.hucs_object_key, top_collection)
+    process_flood_events(s3_utils, args.bucket_name, args.asset_object_key, args.hucs_object_key, args.link_type, asset_handler, args.reprocess_assets, top_collection)
     s3_utils.update_collection(top_collection, 'hwm-collection', args.catalog_path, args.bucket_name)
     top_collection.validate()
+    asset_handler.upload_modified_parquet()
 
 if __name__ == "__main__":
     main()
