@@ -14,6 +14,9 @@ from pystac.extensions.projection import ProjectionExtension
 from ingest.bench import S3Utils
 from ingest.hwm.hwm_stac import create_wkt_string, flowfile_dir
 from ingest.hwm.hwm_handle_assets import HWMAssetHandler
+import matplotlib
+matplotlib.use('Agg')  # Use the 'Agg' backend, which is non-interactive
+import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.INFO)
 
@@ -54,6 +57,14 @@ def create_hwm_collection():
 
     return collection
 
+def create_thumbnail(gdf, output_path):
+    fig, ax = plt.subplots(figsize=(10, 10))
+    gdf.plot(ax=ax, color='blue', markersize=5)
+    ax.set_axis_off()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=100, bbox_inches='tight', pad_inches=0)
+    plt.close(fig)
+    
 def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_key, link_type, asset_handler, reprocess_assets, top_collection):
     _, hwm_gpkg = os.path.split(asset_object_key)
     _, hucs_gpkg = os.path.split(hucs_object_key)
@@ -77,115 +88,93 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
         event_id = event_name.replace(" ", "_")
         print(f"processing {event_id}")
 
-        # Create a sub-collection for the event
-        sub_collection = pystac.Collection(
-            id=f'{event_id}-collection',
-            title=f"High-Water Mark Collection for {event_id}",
-            description=f"Sub-collection for {event_id} event",
-            extent=pystac.Extent(
-                spatial=pystac.SpatialExtent([[-179.9, 7.2, -64.5, 61.8]]),
-                temporal=pystac.TemporalExtent([[datetime(1888, 7, 1, tzinfo=timezone.utc), datetime(2023, 7, 14)]])
-            ),
-            license='CC-BY-4.0',
-            providers=[pystac.Provider(
-                name='USGS',
-                roles=[pystac.ProviderRole.PRODUCER, pystac.ProviderRole.PROCESSOR, pystac.ProviderRole.LICENSOR],
-                description='The United States Geological Survey.',
-                url='https://www.usgs.gov'
-            )],
-        )
-        pt_count = 0
-        # Process each point in the event
-        for idx, row in event_df.iterrows():
-            point = Point(row.geometry.x, row.geometry.y, row['elev_ft'])
-            geometry = point
-
-            # find the bounding box of the point
-            bbox = geometry.bounds
-
-            # extract datetime from "flag_date" column and format as YYYY-MM-DDTHH:MM:SSZ
-            date_str = row['flag_date']
-            datetime_obj = parse_date(date_str).replace(tzinfo=timezone.utc)
-
-            # create a wkt string with the available information
-            proj = create_wkt_string(
-                verticalDatumName=row['verticalDatumName'],
-                horizontalDatumName=row['horizontalDatumName']
-            )
-
-            # lift all the other attribute table columns and put into a dictionary. "latitude_dd" is just presenting latitude and longitude in a specific format. Including "latitude" and "longitude" in point properties because they might eb in a different projection than the EPSG4326 projection the gpkg all the points were pulled from are in.
-            excluded_columns = [
-                "eventName","flag_date", "site_latitude", 
-                "site_longitude", "files", "lat4326", "lon4326", 
-                "vertical_datums", "elev_ft", "adj_elev_ft","latitude_dd", "longitude_dd", 
-                "horizontalDatumName", "verticalDatumName","geometry"
-            ]
-            prop_dict = row.drop(labels=excluded_columns).to_dict()
-
-            # Filter out keys with NULL (None or NaN) values
-            prop_dict = {k: v for k, v in prop_dict.items() if pd.notnull(v)}
-
-            # Perform a join to find which HUC polygons the point is in
-            point_gdf = gpd.GeoDataFrame([row], geometry='geometry', crs = "EPSG:4326")
-            point_in_hucs = gpd.sjoin(point_gdf, hucs_gdf, how="left", predicate="within")
-
-            huc8_list = point_in_hucs['HUC8'].unique().tolist()
-            prop_dict['HUC8'] = huc8_list
-
-            # Create a STAC item for the point
-            point_item = create_item(f"{event_id}-{pt_count}", geometry, bbox, proj, datetime_obj, prop_dict)
-            pt_count = pt_count + 1 #increment hwm id counter
-
-            # Add the item to the event sub-collection
-            sub_collection.add_item(point_item)
-
+        # Create a STAC item for the event
         points = event_df.geometry.tolist()
+        all_points = MultiPoint(points)
+        event_bbox = all_points.bounds
 
-        # attach flowfile to collection
+        # Get the temporal extent for the event
+        start_date = event_df['flag_date'].min()
+        end_date = event_df['flag_date'].max()
+        start_date = parse_date(start_date).replace(tzinfo=timezone.utc)
+        end_date = parse_date(end_date).replace(tzinfo=timezone.utc)
+
+         # Perform spatial join to find HUCs
+        event_gdf = gpd.GeoDataFrame(geometry=[all_points], crs=event_df.crs)
+        huc_join = gpd.sjoin(event_gdf, hucs_gdf, how="left", predicate="intersects")
+        huc8_list = huc_join['HUC8'].tolist() if 'HUC8' in huc_join.columns else []
+
+        event_item = pystac.Item(
+            id=f'{event_id}-item',
+            geometry=all_points.__geo_interface__,
+            bbox=event_bbox,
+            datetime=start_date,
+            properties={
+                "start_datetime": start_date.isoformat(),
+                "end_datetime": end_date.isoformat(),
+                "point_count": len(points),
+                "hucs": huc8_list
+            }
+        )
+
+        # Create a GeoPackage for the event
+        with tempfile.TemporaryDirectory() as gpkg_tmpdir:
+            event_gpkg_path = f"{gpkg_tmpdir}/{event_id}.gpkg"
+            event_df.to_file(event_gpkg_path, driver="GPKG")
+            # Upload the GeoPackage to S3
+            gpkg_key = f"benchmark/high_water_marks/usgs/event_gpkgs/{event_id}.gpkg"
+            s3_utils.s3_client.upload_file(event_gpkg_path, bucket_name, gpkg_key)
+
+        # Add the GeoPackage as an asset to the event item
+        gpkg_asset = pystac.Asset(
+            href=s3_utils.generate_href(bucket_name, gpkg_key, link_type),
+            media_type="application/geopackage+sqlite3",
+            roles=["data"],
+            title=f"GeoPackage for {event_id}",
+            description="Contains point data and attributes for high water marks in this event"
+        )
+        event_item.add_asset("data", gpkg_asset)
+
+        # Create and add thumbnail
+        with tempfile.TemporaryDirectory() as thumb_tmpdir:
+            thumbnail_path = f"{thumb_tmpdir}/{event_id}_thumbnail.png"
+            create_thumbnail(event_df, thumbnail_path)
+            thumbnail_key = f"benchmark/high_water_marks/usgs/thumbnails/{event_id}_thumbnail.png"
+            s3_utils.s3_client.upload_file(thumbnail_path, bucket_name, thumbnail_key)
+
+        thumbnail_asset = pystac.Asset(
+            href=s3_utils.generate_href(bucket_name, thumbnail_key, link_type),
+            media_type="image/png",
+            roles=["thumbnail"],
+            title=f"Thumbnail for {event_id}",
+            description="Thumbnail of the event high water marks"
+        )
+        event_item.add_asset("thumbnail", thumbnail_asset)
+
+        # Handle flowfile asset
         if asset_handler.event_processed(event_id) and reprocess_assets == 'False':
             asset_results = asset_handler.read_data_parquet(event_id)
         else:
             asset_results = asset_handler.handle_assets(flowfile_dir, event_id, points)
 
-        sub_collection.extra_fields['flowfiles'] = asset_results["flowfile_object"] 
+        event_item.properties['flowfiles'] = asset_results["flowfile_object"] 
         flowfile_asset = pystac.Asset(
             href=s3_utils.generate_href(bucket_name, asset_results["flowfile_key"], link_type),
             roles=["data"],
-            description="NWM 3.0 flowfile see flowfiles key in properties for more information. Each HWM subcollection currently only has one flowfile associated with it."
+            description="NWM 3.0 flowfile. see flowfiles key in properties for more information."
         )
+        event_item.add_asset(f"{event_id}-flowfile", flowfile_asset)
 
-        sub_collection.add_asset(f"{event_id}-flowfile",flowfile_asset)
-
-        # Update the temporal extent of the sub-collection using event_month
+        # Update the temporal extent of the event item using event_month
         if asset_results.get("event_month") is not None:
             event_month = asset_results["event_month"]
             start_of_month = event_month.replace(day=1, tzinfo=timezone.utc)
             end_of_month = (start_of_month + pd.offsets.MonthEnd(1)).replace(tzinfo=timezone.utc)
-            sub_collection.extent.temporal = pystac.TemporalExtent([[start_of_month, end_of_month]])
+            event_item.properties["month_start"] = start_of_month.isoformat()
+            event_item.properties["month_end"] = end_of_month.isoformat()
 
-        # Calculate bounding box for all points in the event
-        all_points = MultiPoint(points)
-        event_bbox = all_points.bounds
-        
-        # Update the spatial extent of the sub-collection to reflect the points bbox
-        sub_collection.extent.spatial = pystac.SpatialExtent([event_bbox])       
-        sub_collection.extra_fields['geometry'] = mapping(all_points)
-
-        # Add the sub-collection to the top-level collection
-        top_collection.add_child(sub_collection)
-
-def create_item(event_id, geometry, bbox, proj, datetime, prop_dict):
-    item = pystac.Item(id=event_id,
-                geometry=geometry.__geo_interface__,
-                bbox=bbox,
-                datetime=datetime,
-                properties=prop_dict)
-    item.properties["description"] = "This STAC item documents a single point in a HWM collection documenting an event. Each point's properties contains latitude and longitude fields that should correspond tot he horizontal datum provided in the item's WKT string."
-
-    # Add projection information
-    proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
-    proj_ext.wkt2 = proj
-    return item
+        # Add the event item to the top-level collection
+        top_collection.add_item(event_item)
 
 def main():
     args = parse_arguments()

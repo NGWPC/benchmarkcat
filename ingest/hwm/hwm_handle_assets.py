@@ -68,11 +68,9 @@ class HWMAssetHandler:
         row = self.results_df[self.results_df['event_id'] == event_id]
         if not row.empty:
             result = row.to_dict(orient='records')[0]
-            # Convert JSON strings back to objects if not empty
-            if result.get('flowfile_key'):
-                result['flowfile_key'] = json.loads(result['flowfile_key'])
-                if result.get('flowfile_object'):
-                    result['flowfile_object'] = json.loads(result['flowfile_object'])
+            # Only convert 'flowfile_object' from JSON string back to dict
+            if result.get('flowfile_object'):
+                result['flowfile_object'] = json.loads(result['flowfile_object'])
             if result.get('event_month'):
                 result['event_month'] = datetime.fromisoformat(result['event_month'])
             print(f"read event {event_id}")
