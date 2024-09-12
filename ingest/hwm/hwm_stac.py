@@ -4,8 +4,8 @@ nwm_streams = 'hand_fim/inputs/nwm_hydrofabric/nwm_flows.gpkg'
 # need the bucket name for url_conus since isn't fimc-data
 url_conus = 's3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/chrtout.zarr'
 
-#place to write the hwm flowfiles too
-flowfile_dir = "/benchmark/high_water_marks/usgs/flowfiles/"
+#place to write the hwm flowfiles too. Make sure there isn't a leading or trailing "/" for s3 upload.
+flowfile_dir = "benchmark/high_water_marks/usgs/flowfiles"
 
 # different conditions to create wkt strings for events depending on crs/datum used
 def create_wkt_string(horizontalDatumName, verticalDatumName):

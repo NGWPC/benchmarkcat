@@ -176,7 +176,7 @@ def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfi
     else:
         tile_asset = asset_path.strip('/').split('/')[-1]
         asset_type = AssetUtils.determine_asset_type(tile_asset)
-        role = 'metadata' if asset_type in ['Footprint', 'Metadata', 'Schedule'] else 'data'
+        role = 'thumbnail' if asset_type == 'Thumbnail' else 'metadata' if asset_type in ['Footprint', 'Metadata', 'Schedule'] else 'data'
         media_type = AssetUtils.get_media_type(tile_asset)
         asset_id = f"{equi7tile}_{asset_type.replace(' ', '_')}"
         asset = pystac.Asset(

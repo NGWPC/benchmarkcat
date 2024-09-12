@@ -25,8 +25,10 @@ def parse_arguments():
     parser.add_argument('--link_type', type=str, default='uri', help='Link type, either "url" or "uri"')
     parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
     parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
+    # depending on which value you set for asset_object key you can process nws or usgs ahps data
     parser.add_argument('--asset_object_key', type=str, default='hand_fim/test_cases/usgs_test_cases/validation_data_usgs/', help='Key for the asset object in the S3 bucket')
     parser.add_argument('--reprocess_assets', type=str, default='False', help='Set to true to reprocess assets using USGSFIMAssetHandler')
+    # derived_metadata_path agency needs to match the agency in "asset_object_key"
     parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/usgs_fim_collection.parquet', help='S3 key for the derived metadata Parquet file created by asset handling code.')
     return parser.parse_args()
 
@@ -131,7 +133,7 @@ def create_assets(item, gauge_path, gauge, asset_results, s3_utils, bucket_name,
         item.add_asset(
             "thumbnail",
             pystac.Asset(
-                href=asset_results["thumbnail"],
+                href=s3_utils.generate_href(bucket_name, asset_results["thumbnail"], link_type),
                 media_type="image/png",
                 roles=["thumbnail"],
                 title="Thumbnail Image"

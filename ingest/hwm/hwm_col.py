@@ -9,11 +9,11 @@ import os
 import logging
 from datetime import datetime, timezone
 import pystac
-from shapely.geometry import MultiPoint, Point
+from shapely.geometry import MultiPoint, Point, box, mapping
 from pystac.extensions.projection import ProjectionExtension
 from ingest.bench import S3Utils
 from ingest.hwm.hwm_stac import create_wkt_string, flowfile_dir
-from hwm_handle_assets import HWMAssetHandler
+from ingest.hwm.hwm_handle_assets import HWMAssetHandler
 
 logging.basicConfig(level=logging.INFO)
 
@@ -80,6 +80,7 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
         # Create a sub-collection for the event
         sub_collection = pystac.Collection(
             id=f'{event_id}-collection',
+            title=f"High-Water Mark Collection for {event_id}",
             description=f"Sub-collection for {event_id} event",
             extent=pystac.Extent(
                 spatial=pystac.SpatialExtent([[-179.9, 7.2, -64.5, 61.8]]),
@@ -148,12 +149,27 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
 
         sub_collection.extra_fields['flowfiles'] = asset_results["flowfile_object"] 
         flowfile_asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, asset_results["flowfile_object"], link_type),
+            href=s3_utils.generate_href(bucket_name, asset_results["flowfile_key"], link_type),
             roles=["data"],
-            description="NWM 3.0 flowfile see flowfiles key in properties for more information"
+            description="NWM 3.0 flowfile see flowfiles key in properties for more information. Each HWM subcollection currently only has one flowfile associated with it."
         )
 
-        sub_collection.add_asset(flowfile_asset)
+        sub_collection.add_asset(f"{event_id}-flowfile",flowfile_asset)
+
+        # Update the temporal extent of the sub-collection using event_month
+        if asset_results.get("event_month") is not None:
+            event_month = asset_results["event_month"]
+            start_of_month = event_month.replace(day=1, tzinfo=timezone.utc)
+            end_of_month = (start_of_month + pd.offsets.MonthEnd(1)).replace(tzinfo=timezone.utc)
+            sub_collection.extent.temporal = pystac.TemporalExtent([[start_of_month, end_of_month]])
+
+        # Calculate bounding box for all points in the event
+        all_points = MultiPoint(points)
+        event_bbox = all_points.bounds
+        
+        # Update the spatial extent of the sub-collection to reflect the points bbox
+        sub_collection.extent.spatial = pystac.SpatialExtent([event_bbox])       
+        sub_collection.extra_fields['geometry'] = mapping(all_points)
 
         # Add the sub-collection to the top-level collection
         top_collection.add_child(sub_collection)
