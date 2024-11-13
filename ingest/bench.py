@@ -171,39 +171,54 @@ class S3Utils:
 
 class RasterUtils:
     @staticmethod
-    def create_preview(raster, preview_path, size=(256, 256)):
-        with rasterio.open(raster) as src:
-            img_data = src.read(1)
-            
-            try:
-                colormap = src.colormap(1)
-            except ValueError:
-                colormap = None
-            
-            if colormap:
-                img_data_rgba = np.zeros((img_data.shape[0], img_data.shape[1], 4), dtype=np.uint8)
-                
-                for index, color in colormap.items():
-                    mask = img_data == index
-                    img_data_rgba[mask] = color
-            else:
-                img_data_rgba = np.zeros((img_data.shape[0], img_data.shape[1], 4), dtype=np.uint8)
-                img_data_rgba[img_data == 0] = [255, 255, 255, 255]
-                img_data_rgba[img_data != 0] = [0, 0, 0, 255]
-            
-            pil_image = Image.fromarray(img_data_rgba, 'RGBA')
-
-            img_width, img_height = pil_image.size
-            max_width, max_height = size
-
-            scale = min(max_width / img_width, max_height / img_height)
-
-            new_width = int(img_width * scale)
-            new_height = int(img_height * scale)
-
-            preview = pil_image.resize((new_width, new_height), resample=Image.Resampling.LANCZOS)
-
-            preview.save(preview_path, format="PNG")
+    def create_preview(raster_path, preview_path, size=(256, 256), chunk_size=1024):
+        """Create preview using chunked processing with rioxarray."""
+        # Open the raster with chunking
+        raster = rioxarray.open_rasterio(
+            raster_path,
+            masked=True,
+            chunks={'x': chunk_size, 'y': chunk_size}
+        )
+        band1 = raster.sel(band=1)
+    
+        # Calculate target size maintaining aspect ratio
+        ratio = band1.shape[1] / band1.shape[0]  # width/height
+        if ratio > 1:
+            out_width = chunk_size
+            out_height = int(chunk_size / ratio)
+        else:
+            out_height = chunk_size
+            out_width = int(chunk_size * ratio)
+    
+        # Coarsen the data to target size
+        # Calculate reduction factors
+        y_factor = band1.shape[0] // out_height
+        x_factor = band1.shape[1] // out_width
+    
+        # Use coarsen to reduce the size
+        coarsened = band1.coarsen(
+            y=y_factor,
+            x=x_factor,
+            boundary='trim'
+        ).any()
+    
+        # Compute the result
+        result = coarsened.compute()
+    
+        # Convert to RGBA
+        img_data_rgba = np.zeros((*result.shape, 4), dtype=np.uint8)
+        img_data_rgba[~result] = [255, 255, 255, 255]  # White for 0/False
+        img_data_rgba[result] = [0, 0, 0, 255]         # Black for non-zero/True
+    
+        # Create PIL image and resize to final size
+        pil_image = Image.fromarray(img_data_rgba, 'RGBA')
+        max_width, max_height = size
+        scale = min(max_width / out_width, max_height / out_height)
+        new_width = int(out_width * scale)
+        new_height = int(out_height * scale)
+    
+        preview = pil_image.resize((new_width, new_height), resample=Image.Resampling.LANCZOS)
+        preview.save(preview_path, format="PNG")
 
     @staticmethod
     def count_pixels(raster_path, values=None):

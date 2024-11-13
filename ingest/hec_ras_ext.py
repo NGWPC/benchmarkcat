@@ -20,7 +20,6 @@ class HECRASExtension(
 
     def apply(
         self,
-        huc8: Optional[int] = None,
         gauge: Optional[str] = None,
         magnitude: Optional[Dict[str, Any]] = None,
         extent_area: Optional[Dict[str, Any]] = None,
@@ -35,8 +34,6 @@ class HECRASExtension(
         continuous: Optional[List[str]] = None,
         elevation_source: Optional[Dict[str, Any]] = None
     ) -> None:
-        if huc8 is not None:
-            self.huc8 = huc8
         if gauge is not None:
             self.gauge = gauge
         if magnitude is not None:
@@ -63,14 +60,6 @@ class HECRASExtension(
             self.continuous = continuous
         if elevation_source is not None:
             self.elevation_source = elevation_source
-
-    @property
-    def huc8(self) -> Optional[int]:
-        return self._get_property(f"{PREFIX}huc8", int)
-
-    @huc8.setter
-    def huc8(self, v: Optional[int]) -> None:
-        self._set_property(f"{PREFIX}huc8", v)
 
     @property
     def gauge(self) -> Optional[str]:

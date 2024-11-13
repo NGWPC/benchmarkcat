@@ -30,11 +30,13 @@ class HWMAssetHandler:
         self.local_results_file = os.path.join(script_dir, results_file)
         self.results_df = self.load_results()
         self.ds_url = hwm_stac.url_conus
-        localstreams = os.path.join(script_dir,'nwm_flows.gpkg')
-        self.s3_utils.s3_client.download_file(self.bucket_name, hwm_stac.nwm_streams,localstreams)
-        print("loading streams")
-        self.nwm_streams =  gpd.read_file(localstreams).to_crs(4326)
-        print("done loading streams")
+        self.nwm_streams_path = os.path.join(os.path.dirname(script_dir), 'nwm_flows.gpkg')
+    
+        # Download the file if it doesn't exist
+        if not os.path.exists(self.nwm_streams_path):
+            print("downloading streams")
+            self.s3_utils.s3_client.download_file(self.bucket_name, hwm_stac.nwm_streams, self.nwm_streams_path)
+            print("done downloading streams")
 
     def load_results(self):
         try:
@@ -99,7 +101,7 @@ class HWMAssetHandler:
         end_time = (start_time + pd.DateOffset(months=1)) - pd.Timedelta(days=1)
         if event_month and datetime(1979, 2, 1) <= event_month <= datetime(2023, 1, 31):
             ds = self.open_ds(self.ds_url)
-            feature_ids = self.feature_ids_in_marks_bbox(points, self.nwm_streams)
+            feature_ids = self.feature_ids_in_marks_bbox(points, self.nwm_streams_path)
             peak_time = self.get_peak_discharge_time(ds, feature_ids, start_time, end_time)
             flowfile_df = self.create_flowfile(ds, feature_ids, peak_time)
 
@@ -155,11 +157,28 @@ class HWMAssetHandler:
             fsspec.get_mapper(url, anon=True), consolidated=True, mask_and_scale=True
         )['streamflow'].drop_vars(['latitude', 'elevation', 'gage_id', 'longitude', 'order'])
 
-    def feature_ids_in_marks_bbox(self,geometries, nwm_streams):
-        """Identify feature IDs inside a bbox that encapsulates all the points."""
+    # query the nwm_flows gpkg for better memory efficiency
+    def feature_ids_in_marks_bbox(self, geometries, nwm_streams_path):
+        """Identify feature IDs inside a bbox that encapsulates all the points using SQL query."""
+        # Create GeoDataFrame from points to get bounds
         points = gpd.GeoDataFrame(geometry=geometries)
-        bbox = box(*points.total_bounds)
-        return sorted(nwm_streams[nwm_streams.intersects(bbox)]['ID'].tolist())
+        minx, miny, maxx, maxy = points.total_bounds
+    
+        # Construct SQL query using spatial filter
+        bbox_wkt = f"POLYGON(({minx} {miny}, {minx} {maxy}, {maxx} {maxy}, {maxx} {miny}, {minx} {miny}))"
+        sql_query = f"""
+            SELECT ID 
+            FROM nwm_streams 
+            WHERE ST_Intersects(geometry, ST_GeomFromText('{bbox_wkt}', 4326))
+        """
+    
+        # Read only the intersecting features
+        intersecting_features = gpd.read_file(
+            nwm_streams_path,
+            sql=sql_query
+        )
+    
+        return sorted(intersecting_features['ID'].tolist())
 
     def extract_date_from_event_id(self, event_id):
         match = re.search(r'(\d{4})_([A-Za-z]+)', event_id)

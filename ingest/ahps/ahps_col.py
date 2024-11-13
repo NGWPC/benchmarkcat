@@ -27,7 +27,7 @@ def parse_arguments():
     parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
     # depending on which value you set for asset_object key you can process nws or usgs ahps data
     parser.add_argument('--asset_object_key', type=str, default='hand_fim/test_cases/usgs_test_cases/validation_data_usgs/', help='Key for the asset object in the S3 bucket')
-    parser.add_argument('--reprocess_assets', type=str, default='False', help='Set to true to reprocess assets using USGSFIMAssetHandler')
+    parser.add_argument('--reprocess_assets', action='store_true', help='Set to true to reprocess assets using USGSFIMAssetHandler')
     # derived_metadata_path agency needs to match the agency in "asset_object_key"
     parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/usgs_fim_collection.parquet', help='S3 key for the derived metadata Parquet file created by asset handling code.')
     return parser.parse_args()
@@ -58,7 +58,7 @@ def create_ahps_fim_collection(agency):
         title=f"{agency}-fim-benchmark-flood-rasters",
         keywords=["flood", f"{agency}-fim", "model", "extents", "depths", "HEC-RAS"],
         extent=pystac.Extent(
-            spatial=pystac.SpatialExtent([[-180, -90, 180, 90]]),
+            spatial=pystac.SpatialExtent([[-179.15, 18.91, -66.95, 71.39]]),
             temporal=pystac.TemporalExtent([[None, None]])
         ),
         license='CC0-1.0',
@@ -83,36 +83,33 @@ def process_gauge(gauge_path, agency, huc8, s3_utils, bucket_name, link_type, co
     gauge = gauge_path.strip('/').split('/')[-1]
     geometry, bbox = GeoJSONHandler.process_shapefile(bucket_name, gauge_path, s3_utils.s3_client)
 
+    if asset_handler._assets_processed(gauge_path) and not reprocess_assets:
+        asset_results = asset_handler.read_data_parquet(gauge_path)
+    else:
+        asset_results = asset_handler.handle_assets(gauge_path)
+
     item = pystac.Item(
         id=f"{huc8}-{gauge}-{agency}",
         geometry=geometry,
         bbox=bbox,
         datetime=datetime.now(timezone.utc),
+        hucs=["huc8"],
         properties={
             "title": f"HUC8-{huc8} gauge-{gauge} {agency} fim",
             "description": "Extents and depths associated with the HEC-RAS modelling domain around the National Weather Service gauge used to model the flows",
-            "license": 'CC0-1.0'
+            "license": 'CC0-1.0',
+            "extent_area (m)": asset_results["extent_area"],
+            "gauge": gauge,
+            "flowfile": asset_results["flowfile"]["flowfile_object"],
+            "magnitude": {"study magnitudes": asset_results["magnitudes"]}
         }
     )
-
-    if asset_handler._assets_processed(gauge_path) and reprocess_assets == 'False':
-        asset_results = asset_handler.read_data_parquet(gauge_path)
-    else:
-        asset_results = asset_handler.handle_assets(gauge_path)
     
     create_assets(item, gauge_path, gauge, asset_results, s3_utils, bucket_name, link_type)
 
     # Add wkt2 string using the projection extension
-    projection_ext = ProjectionExtension.ext(item, add_if_missing=True)
+    ProjectionExtension.ext(item, add_if_missing=True)
     item.properties.update({"proj:wkt2":asset_results["wkt2_string"].replace('"', "'")})
-    item_hec_ras_ext = HECRASExtension.ext(item, add_if_missing=True)
-    item_hec_ras_ext.apply(
-        extent_area=asset_results["extent_area"],
-        huc8=int(huc8),
-        gauge=gauge,
-        flowfile=asset_results["flowfile"]["flowfile_object"],
-        magnitude={"study magnitudes": asset_results["magnitudes"]}
-    )
 
     collection.add_item(item)
 

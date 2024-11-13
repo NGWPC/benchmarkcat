@@ -32,7 +32,7 @@ def parse_arguments():
     parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
     parser.add_argument('--asset_object_key', type=str, default='benchmark/high_water_marks/usgs/outputs/all_events.gpkg', help='Key for the asset object in the S3 bucket. Is a single file in the case of the HWM data.')
     parser.add_argument('--hucs_object_key', type=str, default='benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg', help='Where to download the gpkg with the huc8 info')
-    parser.add_argument('--reprocess_assets', type=str, default='False', help='Set to true to reprocess assets using HWMAssetHandler')
+    parser.add_argument('--reprocess_assets', action='store_true', help='Set to true to reprocess assets using HWMAssetHandler')
     parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/hwm_collection.parquet', help='S3 key for the derived metadata Parquet file created by asset handling code.')
     return parser.parse_args()
 
@@ -43,7 +43,7 @@ def create_hwm_collection():
         title="High-Water Mark Collection",
         keywords=["flood", "field", "points","USGS"],
         extent=pystac.Extent(
-            spatial=pystac.SpatialExtent([[-179.9, 7.2, -64.5, 61.8]]),
+            spatial=pystac.SpatialExtent([[-179.15, 18.91, -66.95, 71.39]]),
             temporal=pystac.TemporalExtent([[datetime(1888, 7, 1, tzinfo=timezone.utc), datetime(2023, 7, 14)]])
         ),
         license='CC-BY-4.0',
@@ -106,7 +106,8 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
 
         event_item = pystac.Item(
             id=f'{event_id}-item',
-            geometry=all_points.__geo_interface__,
+            # Use convex hull around all the points as the item's geometry instead of the points themselves so that they render more quickly in stac-browser
+            geometry=all_points.convex_hull.__geo_interface__,
             bbox=event_bbox,
             datetime=start_date,
             properties={
@@ -152,7 +153,7 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
         event_item.add_asset("thumbnail", thumbnail_asset)
 
         # Handle flowfile asset
-        if asset_handler.event_processed(event_id) and reprocess_assets == 'False':
+        if asset_handler.event_processed(event_id) and not reprocess_assets:
             asset_results = asset_handler.read_data_parquet(event_id)
         else:
             asset_results = asset_handler.handle_assets(flowfile_dir, event_id, points)

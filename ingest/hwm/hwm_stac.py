@@ -64,7 +64,7 @@ def create_wkt_string(horizontalDatumName, verticalDatumName):
           f'{horizontal_wkt},' \
           f'{vertical_wkt}]'
 
-    # Replace double quotes with single quotes
+    # Replace double quotes with single quotes to avoid "/" issues
     wkt = wkt.replace('"', "'")
 
     return wkt

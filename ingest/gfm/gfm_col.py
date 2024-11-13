@@ -4,6 +4,8 @@ import geopandas as gpd
 import pandas as pd
 import boto3
 import os
+import tempfile
+from shapely.geometry import shape
 import logging
 from datetime import datetime, timezone
 import pystac
@@ -28,7 +30,8 @@ def parse_arguments():
     parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
     parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
     parser.add_argument('--asset_object_key', type=str, default='benchmark/rs/', help='Key for the asset object in the S3 bucket')
-    parser.add_argument('--reprocess_assets', type=str, default='False', help='Set to true to reprocess assets using GFMAssetHandler')
+    parser.add_argument('--hucs_object_key', type=str, default='benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg', help='Where to download the gpkg with the huc8 info')
+    parser.add_argument('--reprocess_assets', action='store_true', help='Set to true to reprocess assets using GFMAssetHandler')
     parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet', help='S3 key for the derived metadata Parquet file created by asset handling code.')
     return parser.parse_args()
 
@@ -74,32 +77,56 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
 def get_dfo_events(s3_utils, bucket_name, asset_object_key):
     return s3_utils.list_subdirectories(bucket_name, f"{asset_object_key}gfm/")
 
-def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler):
+def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf):
     event_id = dfo_path.strip('/').split('/')[-1]
     logging.info(f"Indexing DFO event: {event_id}")
     
     sent_ti_list = s3_utils.list_subdirectories(bucket_name, dfo_path)
     for sent_ti_path in sent_ti_list:
-        process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler)
+        process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, 
+                    collection, reprocess_assets, asset_handler, hucs_gdf)
 
-def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler):
+def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf=None):
     sent_ti = sent_ti_path.strip('/').split('/')[-1]
     equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['OBSWATER']) if len(os.path.basename(filename).split('_')) > 2]
 
     gfm_version, orbit_state, abs_orbit_num = get_orbit_info(sent_ti_path, s3_utils, bucket_name)
     start_datetime, end_datetime = SentinelName.extract_datetimes(sent_ti)
 
-    if asset_handler.tile_assets_processed(sent_ti_path) and reprocess_assets == 'False':
+    if asset_handler.tile_assets_processed(sent_ti_path) and not reprocess_assets:
         asset_results = asset_handler.read_data_parquet(sent_ti_path)
     else:
         asset_results = asset_handler.handle_assets(sent_ti_path, event_id)
 
+    # Get the second polygon from the multipolygon geometry
     geometry = asset_results["geometry"]
+    geometry_shape = shape(asset_results["geometry"])
+    if hasattr(geometry_shape, 'geoms'):
+        # If it's a multipolygon, get the second polygon
+        try:
+            flood_geometry = list(geometry_shape.geoms)[1].__geo_interface__
+        except IndexError:
+            logging.warning(f"Multipolygon has fewer than 2 polygons for {sent_ti_path}")
+            flood_geometry = geometry_shape.__geo_interface__
+    else:
+        flood_geometry = geometry_shape.__geo_interface__
+
+    # Find intersecting HUC8s if HUCs data is provided
+    huc8_list = []
+    if hucs_gdf is not None:
+        # Create a GeoDataFrame with the flood geometry
+        flood_gdf = gpd.GeoDataFrame(geometry=[shape(flood_geometry)], crs=hucs_gdf.crs)
+        # Perform spatial join
+        huc_join = gpd.sjoin(flood_gdf, hucs_gdf, how="left", predicate="intersects")
+        huc8_list = huc_join['HUC8'].tolist() if 'HUC8' in huc_join.columns else []
+
     bbox = asset_results["bbox"]
     flowfile_object = asset_results["flowfile_object"]
     main_cause = asset_results["main_cause"]
 
-    item = create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, end_datetime, orbit_state, abs_orbit_num, gfm_version, flowfile_object)
+    item = create_item(event_id, main_cause, sent_ti, geometry, bbox, 
+                      start_datetime, end_datetime, orbit_state, abs_orbit_num, 
+                      gfm_version, flowfile_object, huc8_list)
 
     # add extensions to item
     SatExtension.ext(item, add_if_missing=True)
@@ -108,7 +135,6 @@ def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, colle
     add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, asset_results["flowfile_key"])
 
     collection.add_item(item)
-
 
 def get_orbit_info(sent_ti_path, s3_utils, bucket_name):
     advflag_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['ADVFLAG'])
@@ -123,7 +149,8 @@ def get_orbit_info(sent_ti_path, s3_utils, bucket_name):
     abs_orbit_num = SentinelName.extract_orbit_number(sent_ti_path)
     return gfm_version, orbit_state, abs_orbit_num
 
-def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, end_datetime, orbit_state, abs_orbit_num, gfm_version, flowfile_object):
+def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, end_datetime, 
+                orbit_state, abs_orbit_num, gfm_version, flowfile_object, huc8_list):
     return pystac.Item(
         id=f"DFO-{event_id}_tile-{sent_ti}",
         geometry=geometry,
@@ -142,10 +169,10 @@ def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, e
             "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',	
             "gsd": 20,
             "gfm_version": gfm_version,
-            "flowfiles": flowfile_object
+            "flowfiles": flowfile_object,
+            "hucs": huc8_list
         }
     )
-
 
 def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, flowfile_key):
     equi7tile_assets = {}
@@ -194,8 +221,17 @@ def main():
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
     asset_handler = GFMAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
-    for dfo_event in dfo_events:
-        process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, collection, args.reprocess_assets, asset_handler)
+
+    # Download and read HUCs data
+    _, hucs_gpkg = os.path.split(args.hucs_object_key)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_hucs_path = f"{tmpdir}/{hucs_gpkg}"
+        s3_utils.s3_client.download_file(args.bucket_name, args.hucs_object_key, local_hucs_path)
+        hucs_gdf = gpd.read_file(local_hucs_path)
+
+        for dfo_event in dfo_events:
+            process_event(dfo_event, s3_utils, args.bucket_name, args.link_type, 
+                        collection, args.reprocess_assets, asset_handler, hucs_gdf)
 
     s3_utils.update_collection(collection, 'gfm-collection', args.catalog_path, args.bucket_name)
     collection.validate()
