@@ -43,7 +43,7 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
         keywords=["flood", "GFM", "DFO"],
         extent=pystac.Extent(
             spatial=pystac.SpatialExtent([[-179.9, 7.2, -64.5, 61.8]]),
-            temporal=pystac.TemporalExtent([[datetime(2015, 1, 1, tzinfo=timezone.utc), None]])
+            temporal=pystac.TemporalExtent([[datetime(2015, 1, 1, tzinfo=timezone.utc), datetime(2021, 7, 31, tzinfo=timezone.utc)]])
         ),
         license='CC-BY-4.0',
         providers=[pystac.Provider(

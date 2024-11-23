@@ -98,13 +98,11 @@ def process_source_directory(source_path, source, s3_utils, bucket_name, link_ty
                 "source": source,
                 "magnitudes": asset_results["magnitudes"],
                 "extent_areas (m)": extent_areas,  
+                "hucs": [identifier],
+                "flows2fim_version" : "0_2_0",
+                "ripple_version" : "0.7.0"
             }
         )
-        # Add source-specific spatial region identifier
-        if source == 'ble':
-            item.properties["hucs"] = [identifier]  
-        else:  
-            item.properties["region"] = identifier  
 
         # Add projection extension
         ProjectionExtension.ext(item, add_if_missing=True)

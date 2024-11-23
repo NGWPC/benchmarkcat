@@ -113,8 +113,8 @@ class AHPSFIMAssetHandler:
                     local_tiff_path = os.path.join(tmpdir, os.path.basename(tiff))
                     self.s3_utils.s3_client.download_file(self.bucket_name, tiff, local_tiff_path)
                     area = RasterUtils.count_pixels(local_tiff_path)
-                    # convert to meters by mulitplying by pixel res
-                    extent_area[magnitude][os.path.basename(tiff)] = area * 10
+                    # convert to meters by mulitplying by pixel res (pixel length ^2)
+                    extent_area[magnitude][os.path.basename(tiff)] = area * 10 * 10
                     if not first_tiff_processed:
                         wkt2_string = RasterUtils.get_wkt2_string(local_tiff_path)
                         first_tiff_processed = True

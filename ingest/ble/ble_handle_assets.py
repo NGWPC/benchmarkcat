@@ -122,8 +122,8 @@ class BLEAssetHandler:
                 local_extent_path = os.path.join(tmpdir, os.path.basename(extent_tiff))
                 self.s3_utils.s3_client.download_file(self.bucket_name, extent_tiff, local_extent_path)
                 area = RasterUtils.count_pixels(local_extent_path)
-                # convert pixels to meters using resolution of rasters
-                area = area * 3
+                # convert pixels to meters using resolution of rasters (pixel length ^ 2)
+                area = area * 3 * 3
                 extent_area[magnitude] = area
                 if not wkt2_string:
                     wkt2_string = RasterUtils.get_wkt2_string(local_extent_path)
