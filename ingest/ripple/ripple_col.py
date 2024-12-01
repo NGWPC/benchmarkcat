@@ -5,6 +5,8 @@ import boto3
 import pystac
 from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.item_assets import ItemAssetsExtension
+import pdb
+import re
 from .ripple_handle_assets import RippleFIMAssetHandler
 from .ripple_stac import RippleInfo
 from ingest.bench import S3Utils
@@ -24,6 +26,14 @@ def parse_arguments():
     parser.add_argument('--reprocess_assets', action='store_true', help='Reprocess assets')
     parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/ripple_fim_collection.parquet')
     return parser.parse_args()
+
+def extract_huc_code(identifier):
+    """Extract 8-digit HUC code from identifier using regex."""
+    match = re.search(r'\d{8}', identifier)
+    if match:
+        return match.group(0)
+    logging.warning(f"No 8-digit HUC code found in identifier: {identifier}")
+    return None
 
 def create_ripple_collection(s3_utils, bucket_name, asset_object_key, link_type, flowfile_info):
     collection = pystac.Collection(
@@ -70,7 +80,10 @@ def process_source_directory(source_path, source, s3_utils, bucket_name, link_ty
     for subdir in subdirs:
         identifier = subdir.strip('/').split('/')[-1]
         logging.info(f"Processing {source} {identifier}")
-        
+
+        huc_code = extract_huc_code(identifier)
+        hucs_list = [huc_code] if huc_code else []                
+
         if asset_handler.assets_processed(subdir) and not reprocess_assets:
             asset_results = asset_handler.read_data_parquet(subdir)
         else:
@@ -98,7 +111,7 @@ def process_source_directory(source_path, source, s3_utils, bucket_name, link_ty
                 "source": source,
                 "magnitudes": asset_results["magnitudes"],
                 "extent_areas (m)": extent_areas,  
-                "hucs": [identifier],
+                "hucs": hucs_list,
                 "flows2fim_version" : "0_2_0",
                 "ripple_version" : "0.7.0"
             }
@@ -107,6 +120,29 @@ def process_source_directory(source_path, source, s3_utils, bucket_name, link_ty
         # Add projection extension
         ProjectionExtension.ext(item, add_if_missing=True)
         item.properties.update({"proj:wkt2": asset_results["wkt2_string"]})
+
+        # Add thumbnail
+        if "thumbnail" in asset_results and asset_results["thumbnail"]:
+            item.add_asset(
+                "thumbnail",
+                pystac.Asset(
+                    href=s3_utils.generate_href(bucket_name, asset_results["thumbnail"], link_type),
+                    media_type="image/png",
+                    roles=["thumbnail"],
+                    title="Extent thumbnail"
+                )
+            )
+
+            # Add model domain boundary geopackage
+            item.add_asset(
+                "model_domain",
+                pystac.Asset(
+                    href=s3_utils.generate_href(bucket_name, f"{subdir}/model_domain.gpkg", link_type),
+                    media_type="application/geopackage+sqlite3",
+                    roles=["data"],
+                    title="Model Domain Boundary"
+                )
+            )
 
         # Add assets for each magnitude
         for magnitude in asset_results["magnitudes"]:
@@ -121,17 +157,9 @@ def process_source_directory(source_path, source, s3_utils, bucket_name, link_ty
                 )
             )
             
-            # Add domain boundary geopackage
-            item.add_asset(
-                f"{magnitude}_domain",
-                pystac.Asset(
-                    href=s3_utils.generate_href(bucket_name, f"{subdir}/{magnitude}_model_domain.gpkg", link_type),
-                    media_type="application/geopackage+sqlite3",
-                    roles=["data"],
-                    title=f"{magnitude} Model Domain Boundary"
-                )
-            )
-
+        # validate item
+        item.validate()
+        
         collection.add_item(item)
 
 def main():

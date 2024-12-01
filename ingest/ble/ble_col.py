@@ -88,7 +88,9 @@ def create_item(huc8_path, huc8, asset_results, s3_utils, bucket_name, link_type
     ProjectionExtension.ext(item, add_if_missing=True)
     item.properties.update({"proj:wkt2": asset_results["wkt2_string"].replace('"', "'")})
 
-
+    #validate item
+    item.validate()
+    
     # Add item to collection
     collection.add_item(item)
 

@@ -39,7 +39,9 @@ class RippleFIMAssetHandler:
                 'bbox': pd.Series(dtype='str'),
                 'magnitudes': pd.Series(dtype='str'),
                 'extent_areas': pd.Series(dtype='str'),
-                'wkt2_string': pd.Series(dtype='str')
+                'wkt2_string': pd.Series(dtype='str'),
+                'thumbnail': pd.Series(dtype='str'),  
+                'model_domains': pd.Series(dtype='str')
             }
             return pd.DataFrame(columns)
 
@@ -70,6 +72,42 @@ class RippleFIMAssetHandler:
     
         # Get list of tiff files and their magnitudes
         tiff_files = self.s3_utils.list_files_with_extensions(self.bucket_name, item_path, ['.tif'])
+
+        # Create thumbnail from first extent raster
+        if tiff_files:
+            first_extent_path = tiff_files[0]
+            thumbnail_path = self.create_and_add_thumbnail(first_extent_path)
+        else:
+            thumbnail_path = None
+
+        # Process first tiff to get domain information that's consistent across magnitudes
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_tiff = tiff_files[0]
+            local_tiff = os.path.join(tmpdir, os.path.basename(first_tiff))
+            self.s3_utils.s3_client.download_file(self.bucket_name, first_tiff, local_tiff)
+        
+            # Get geometry, bbox, and model domain once
+            convex_hull, bbox, domain = RasterHandler.create_domain_geometry(local_tiff)
+            wkt2_string = RasterHandler.get_wkt2_string(local_tiff)
+        
+            # Create and upload gpkg for the model domain
+            gpkg_name = "model_domain.gpkg"  
+            local_gpkg = os.path.join(tmpdir, gpkg_name)
+        
+            # Create GeoDataFrame with model domain MultiPolygon
+            with rasterio.open(local_tiff) as src:
+                gdf = gpd.GeoDataFrame(
+                    {
+                        'geometry': [shape(domain)]
+                    }, 
+                    crs=src.crs
+                )
+                gdf.to_file(local_gpkg, driver='GPKG')
+        
+            s3_gpkg_path = os.path.join(item_path, gpkg_name)
+            self.s3_utils.s3_client.upload_file(local_gpkg, self.bucket_name, s3_gpkg_path)
+
+        # Process all tiffs just for magnitudes and extent areas
         for tiff in tiff_files:
             magnitude = os.path.basename(tiff).split('_')[0]
             magnitudes.append(magnitude)
@@ -78,47 +116,23 @@ class RippleFIMAssetHandler:
                 local_tiff = os.path.join(tmpdir, os.path.basename(tiff))
                 self.s3_utils.s3_client.download_file(self.bucket_name, tiff, local_tiff)
             
-                # Get geometry, bbox, and model domain for each magnitude
-                convex_hull, bbox, domain = RasterHandler.create_domain_geometry(local_tiff)
-            
-                # For first magnitude, set item geometry and bbox
-                if magnitude == magnitudes[0]:
-                    wkt2_string = RasterHandler.get_wkt2_string(local_tiff)
-                
-                # Store model domain multipolygon
-                model_domains[magnitude] = domain
-            
-                # Create and upload gpkg for this magnitude
-                gpkg_name = f"{magnitude}_model_domain.gpkg"
-                local_gpkg = os.path.join(tmpdir, gpkg_name)
-            
-                # Create GeoDataFrame with model domain MultiPolygon
-                with rasterio.open(local_tiff) as src:
-                    gdf = gpd.GeoDataFrame(
-                        {
-                            'magnitude': [magnitude],
-                            'geometry': [shape(domain)]
-                        }, 
-                        crs=src.crs
-                    )
-                    gdf.to_file(local_gpkg, driver='GPKG')
-            
-                s3_gpkg_path = os.path.join(item_path, gpkg_name)
-                self.s3_utils.s3_client.upload_file(local_gpkg, self.bucket_name, s3_gpkg_path)
-            
-                # Calculate extent area
+                # Calculate extent area only
                 extent_areas[magnitude] = RasterHandler.calculate_extent_area(local_tiff)
+            
+                # Use the same domain for all magnitudes
+                model_domains[magnitude] = domain
 
         results[item_path] = {
             "source": source,
-            "geometry": convex_hull,  # Use the last computed convex hull
-            "bbox": bbox,  # Use the last computed bbox
+            "geometry": convex_hull,
+            "bbox": bbox,
             "magnitudes": magnitudes,
             "extent_areas": extent_areas,
             "model_domains": model_domains,
-            "wkt2_string": wkt2_string
-        }
-    
+            "wkt2_string": wkt2_string,
+            "thumbnail": thumbnail_path  
+        }    
+
         self.write_data_parquet(results)
         return results[item_path]
 
@@ -135,9 +149,8 @@ class RippleFIMAssetHandler:
         )
         
         for flow_file in flow_files:
-            if 'conus_flows' in flow_file:
-                magnitude = flow_file.split('_')[2]  # Extract '2yr', '5yr', etc.
-                flowfile_id = f"conus_flows_{magnitude}"
+            if 'nwm_return_period_flows' in flow_file:
+                flowfile_id = flow_file.replace('.csv', '')  # Remove .csv extension
                 flowfile_ids.append(flowfile_id)
                 flowfile_keys.append(flow_file)
 
@@ -161,6 +174,29 @@ class RippleFIMAssetHandler:
             "flowfile_keys": flowfile_keys,
             "flowfile_object": flowfile_object
         }
+
+    def create_and_add_thumbnail(self, first_extent_path: str) -> str:
+        """Create and upload a thumbnail for the first extent raster."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_extent_path = os.path.join(tmpdir, os.path.basename(first_extent_path))
+            local_thumbnail_path = os.path.join(tmpdir, 'thumbnail.png')
+        
+            # Download extent raster
+            self.s3_utils.s3_client.download_file(
+                self.bucket_name,
+                first_extent_path,
+                local_extent_path
+            )
+        
+            # Create and upload thumbnail
+            thumbnail_s3_path = self.s3_utils.make_and_upload_thumbnail(
+                local_extent_path,
+                local_thumbnail_path,
+                self.bucket_name,
+                first_extent_path
+            )
+        
+            return thumbnail_s3_path
 
     def write_data_parquet(self, results):
         results_copy = copy.deepcopy(results)

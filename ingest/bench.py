@@ -172,7 +172,14 @@ class S3Utils:
 class RasterUtils:
     @staticmethod
     def create_preview(raster_path, preview_path, size=(256, 256), chunk_size=1024):
-        """Create preview using chunked processing with rioxarray."""
+        """Create preview using chunked processing with rioxarray.
+    
+        Args:
+            raster_path: Path to input raster file
+            preview_path: Path to save preview image
+            size: Tuple of (width, height) for final preview size
+            chunk_size: Size of chunks for processing
+        """
         # Open the raster with chunking
         raster = rioxarray.open_rasterio(
             raster_path,
@@ -181,19 +188,27 @@ class RasterUtils:
         )
         band1 = raster.sel(band=1)
     
-        # Calculate target size maintaining aspect ratio
-        ratio = band1.shape[1] / band1.shape[0]  # width/height
-        if ratio > 1:
-            out_width = chunk_size
-            out_height = int(chunk_size / ratio)
-        else:
-            out_height = chunk_size
-            out_width = int(chunk_size * ratio)
+        # Get input dimensions
+        in_height, in_width = band1.shape
     
-        # Coarsen the data to target size
-        # Calculate reduction factors
-        y_factor = band1.shape[0] // out_height
-        x_factor = band1.shape[1] // out_width
+        # Calculate initial target size maintaining aspect ratio
+        ratio = in_width / in_height
+        max_width, max_height = size
+    
+        # Calculate intermediate size that ensures factors > 0
+        # Start with the smaller dimension and scale up
+        if in_height < in_width:  # wide image
+            # Make sure intermediate height is smaller than input height
+            inter_height = min(chunk_size, in_height - 1)
+            inter_width = int(inter_height * ratio)
+        else:  # tall image
+            # Make sure intermediate width is smaller than input width
+            inter_width = min(chunk_size, in_width - 1)
+            inter_height = int(inter_width / ratio)
+    
+        # Calculate reduction factors (guaranteed to be >= 1)
+        y_factor = max(1, in_height // inter_height)
+        x_factor = max(1, in_width // inter_width)
     
         # Use coarsen to reduce the size
         coarsened = band1.coarsen(
@@ -212,10 +227,11 @@ class RasterUtils:
     
         # Create PIL image and resize to final size
         pil_image = Image.fromarray(img_data_rgba, 'RGBA')
-        max_width, max_height = size
-        scale = min(max_width / out_width, max_height / out_height)
-        new_width = int(out_width * scale)
-        new_height = int(out_height * scale)
+    
+        # Calculate final dimensions maintaining aspect ratio
+        scale = min(max_width / result.shape[1], max_height / result.shape[0])
+        new_width = int(result.shape[1] * scale)
+        new_height = int(result.shape[0] * scale)
     
         preview = pil_image.resize((new_width, new_height), resample=Image.Resampling.LANCZOS)
         preview.save(preview_path, format="PNG")
@@ -289,11 +305,16 @@ class FlowfileUtils:
             columns_list.append(columns_list[-1])
 
         for flowfile_id, flowstats, columns in zip(flowfile_ids, flowstats_list, columns_list):
-            second_column = "discharge"
+            if 'discharge' in flowstats:
+                second_column = 'discharge'
+            elif 'streamflow' in flowstats:
+                second_column = 'streamflow'
+            else:
+                raise ValueError("Neither 'discharge' nor 'streamflow' found in DataFrame columns")
             if second_column in flowstats:
                 flow_summaries = {
                     "Flowstats": {
-                        second_column: {
+                        "discharge": {
                             "Min": float(flowstats[second_column]['Min']),
                             "Max": float(flowstats[second_column]['Max']),
                             "Mean": float(flowstats[second_column]['Mean'])
@@ -306,6 +327,6 @@ class FlowfileUtils:
                     "columns": columns
                 }
             else:
-                raise KeyError(f"Column {second_column} not found in flowstats")
+                raise KeyError(f"Column discharge not found in flowstats")
 
         return flowfile_objects

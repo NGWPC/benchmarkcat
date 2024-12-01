@@ -4,6 +4,7 @@ import geopandas as gpd
 import pandas as pd
 import boto3
 import os
+import re
 import tempfile
 from shapely.geometry import shape
 import logging
@@ -88,7 +89,10 @@ def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reproc
 
 def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf=None):
     sent_ti = sent_ti_path.strip('/').split('/')[-1]
-    equi7tiles_list = [os.path.basename(filename).split('_')[1] for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['OBSWATER']) if len(os.path.basename(filename).split('_')) > 2]
+    equi7tiles_list = [m.group() for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['OBSWATER']) 
+                       if len(os.path.basename(filename).split('_')) > 2 
+                       for m in [re.search(r'[E]\d{3}[N]\d{3}T\d', os.path.basename(filename))]
+                       if m is not None]
 
     gfm_version, orbit_state, abs_orbit_num = get_orbit_info(sent_ti_path, s3_utils, bucket_name)
     start_datetime, end_datetime = SentinelName.extract_datetimes(sent_ti)
@@ -96,7 +100,7 @@ def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, colle
     if asset_handler.tile_assets_processed(sent_ti_path) and not reprocess_assets:
         asset_results = asset_handler.read_data_parquet(sent_ti_path)
     else:
-        asset_results = asset_handler.handle_assets(sent_ti_path, event_id)
+        asset_results = asset_handler.handle_assets(sent_ti_path, event_id, equi7tiles_list)
 
     # Get the second polygon from the multipolygon geometry
     geometry = asset_results["geometry"]
@@ -123,16 +127,20 @@ def process_tile(sent_ti_path, event_id, s3_utils, bucket_name, link_type, colle
     bbox = asset_results["bbox"]
     flowfile_object = asset_results["flowfile_object"]
     main_cause = asset_results["main_cause"]
+    equi7tile_areas = asset_results["equi7tile_areas"]
 
     item = create_item(event_id, main_cause, sent_ti, geometry, bbox, 
                       start_datetime, end_datetime, orbit_state, abs_orbit_num, 
-                      gfm_version, flowfile_object, huc8_list)
+                      gfm_version, flowfile_object, huc8_list, equi7tile_areas)
 
     # add extensions to item
     SatExtension.ext(item, add_if_missing=True)
     ProjectionExtension.ext(item, add_if_missing=True)
 
     add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, asset_results["flowfile_key"])
+
+    # validate item
+    item.validate()
 
     collection.add_item(item)
 
@@ -150,28 +158,35 @@ def get_orbit_info(sent_ti_path, s3_utils, bucket_name):
     return gfm_version, orbit_state, abs_orbit_num
 
 def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, end_datetime, 
-                orbit_state, abs_orbit_num, gfm_version, flowfile_object, huc8_list):
+                orbit_state, abs_orbit_num, gfm_version, flowfile_object, huc8_list, equi7tile_areas):
+    properties = {
+        "title": f"DFO-{event_id}_tile-{sent_ti}",
+        "description": f"This item lists some of assets associated with the GFM scene {sent_ti}.",
+        "main_cause": main_cause,
+        "gfm_data_take_start_datetime": start_datetime.isoformat(),  
+        "gfm_data_take_end_datetime": end_datetime.isoformat(),
+        "dfo_event_id": event_id,
+        "proj:epsg": 27705,
+        "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',
+        "gsd": 20,
+        "gfm_version": gfm_version,
+        "flowfiles": flowfile_object,
+        "hucs": huc8_list,
+        "tile_total_inundated_area": equi7tile_areas
+    }
+    
+    # Add orbit properties only if they exist
+    if orbit_state is not None:
+        properties["sat:orbit_state"] = orbit_state
+    if abs_orbit_num is not None:
+        properties["sat:absolute_orbit"] = int(abs_orbit_num)
+
     return pystac.Item(
         id=f"DFO-{event_id}_tile-{sent_ti}",
         geometry=geometry,
         bbox=bbox,
         datetime=start_datetime,
-        properties={
-            "title": f"DFO-{event_id}_tile-{sent_ti}",
-            "description": f"This item lists some of assets associated with the GFM scene {sent_ti}.",
-            "main_cause": main_cause,
-            "sat:orbit_state": orbit_state,
-            "sat:absolute_orbit": abs_orbit_num,
-            "gfm_data_take_start_datetime": start_datetime.isoformat(),  
-            "gfm_data_take_end_datetime": end_datetime.isoformat(),
-            "dfo_event_id": event_id,
-            "proj:epsg": 27705,
-            "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',	
-            "gsd": 20,
-            "gfm_version": gfm_version,
-            "flowfiles": flowfile_object,
-            "hucs": huc8_list
-        }
+        properties=properties
     )
 
 def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_name, link_type, flowfile_key):

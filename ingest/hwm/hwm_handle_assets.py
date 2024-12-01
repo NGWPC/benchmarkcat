@@ -11,6 +11,7 @@ import xarray as xr
 import fsspec
 import geopandas as gpd
 from shapely.geometry import box
+from osgeo import ogr, osr
 from typing import Dict
 from calendar import month_abbr, month_name
 
@@ -24,6 +25,7 @@ class HWMAssetHandler:
     def __init__(self, s3_utils, bucket_name, derived_metadata_path, results_file="hwm_collection.parquet") -> None:
         self.s3_utils = s3_utils
         self.bucket_name = bucket_name
+        self.albers_crs = hwm_stac.albers_crs
         self.derived_metadata_path = derived_metadata_path
         self.results_file = results_file
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -101,7 +103,7 @@ class HWMAssetHandler:
         end_time = (start_time + pd.DateOffset(months=1)) - pd.Timedelta(days=1)
         if event_month and datetime(1979, 2, 1) <= event_month <= datetime(2023, 1, 31):
             ds = self.open_ds(self.ds_url)
-            feature_ids = self.feature_ids_in_marks_bbox(points, self.nwm_streams_path)
+            feature_ids = self.feature_ids_in_marks_bbox(points, self.nwm_streams_path, self.albers_crs)
             peak_time = self.get_peak_discharge_time(ds, feature_ids, start_time, end_time)
             flowfile_df = self.create_flowfile(ds, feature_ids, peak_time)
 
@@ -157,28 +159,30 @@ class HWMAssetHandler:
             fsspec.get_mapper(url, anon=True), consolidated=True, mask_and_scale=True
         )['streamflow'].drop_vars(['latitude', 'elevation', 'gage_id', 'longitude', 'order'])
 
-    # query the nwm_flows gpkg for better memory efficiency
-    def feature_ids_in_marks_bbox(self, geometries, nwm_streams_path):
-        """Identify feature IDs inside a bbox that encapsulates all the points using SQL query."""
-        # Create GeoDataFrame from points to get bounds
-        points = gpd.GeoDataFrame(geometry=geometries)
-        minx, miny, maxx, maxy = points.total_bounds
+    def feature_ids_in_marks_bbox(self, geometries, nwm_streams_path, albers_crs):
+        """Identify feature IDs inside a bbox that encapsulates all the points using OGR spatial filter."""
+        # Create GeoDataFrame from points to get bounds, explicitly setting CRS
+        points = gpd.GeoDataFrame(geometry=geometries, crs="EPSG:4326")
     
-        # Construct SQL query using spatial filter
-        bbox_wkt = f"POLYGON(({minx} {miny}, {minx} {maxy}, {maxx} {maxy}, {maxx} {miny}, {minx} {miny}))"
-        sql_query = f"""
-            SELECT ID 
-            FROM nwm_streams 
-            WHERE ST_Intersects(geometry, ST_GeomFromText('{bbox_wkt}', 4326))
-        """
+        points_transformed = points.to_crs(albers_crs)
+        minx, miny, maxx, maxy = points_transformed.total_bounds
+
+        # Open the GeoPackage file
+        ds = ogr.Open(nwm_streams_path)
+        layer = ds.GetLayerByName("nwm_streams")
     
-        # Read only the intersecting features
-        intersecting_features = gpd.read_file(
-            nwm_streams_path,
-            sql=sql_query
-        )
+        # Set spatial filter using transformed bbox
+        layer.SetSpatialFilterRect(minx, miny, maxx, maxy)
     
-        return sorted(intersecting_features['ID'].tolist())
+        # Collect feature IDs that intersect the bbox
+        feature_ids = []
+        for feature in layer:
+            feature_ids.append(feature.GetField('ID'))
+
+        # Clean up
+        ds = None
+    
+        return sorted(feature_ids)
 
     def extract_date_from_event_id(self, event_id):
         match = re.search(r'(\d{4})_([A-Za-z]+)', event_id)

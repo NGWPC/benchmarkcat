@@ -1,4 +1,5 @@
 import os
+import pdb
 import json
 from shapely.geometry import shape, MultiPolygon, Polygon, mapping
 from shapely.ops import transform
@@ -46,7 +47,6 @@ class GeoJSONHandler:
         combined_geometry = MultiPolygon(flattened_geometries)
         bbox = combined_geometry.bounds
         combined_bbox = [bbox[0], bbox[1], bbox[2], bbox[3]]
-
         geojson_geometry = json.loads(json.dumps(mapping(combined_geometry)))
         return geojson_geometry, combined_bbox
 
@@ -153,7 +153,7 @@ class AssetUtils:
         return media_types.get(ext, "application/octet-stream")
 
 class GFMGeometryCreator:
-    def __init__(self, bucket_name: str, s3_client, gdf_geom):
+    def __init__(self, bucket_name: str, s3_client, gdf_geom=None):
         self.bucket_name = bucket_name
         self.s3_client = s3_client
         self.gdf_geom = gdf_geom
@@ -163,7 +163,8 @@ class GFMGeometryCreator:
     def make_item_geom(self, key: str) -> Tuple[dict, List[float]]:
         geojson_geometries = []
 
-        geojson_geometries.append(self.gdf_geom)
+        if self.gdf_geom is not None:
+            geojson_geometries.append(self.gdf_geom)
 
         response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
         geojson_content = response['Body'].read().decode('utf-8')
@@ -238,7 +239,7 @@ class GFMInfo:
         ),
         "dfo-event-footprint": AssetDefinition.create(
             title="DFO event footprint",
-            description="This is the DFO footprint that was identified as intersecting with the scene.",
+            description="This is the DFO footprint that was identified as intersecting with the scene. This asset is not included in items in the gfm-expanded-collection that adds to the original GFM collection associated that were associated with DFO events.",
             media_type="application/geo+json",
             roles=["data"]
         )

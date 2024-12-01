@@ -1,4 +1,5 @@
 import os
+import pdb
 import json
 import logging
 import tempfile
@@ -7,7 +8,7 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import mapping, shape
 from ingest.gfm.gfm_stac import GFMInfo, GFMGeometryCreator
-from ingest.bench import FlowfileUtils
+from ingest.bench import FlowfileUtils, RasterUtils
 from typing import Dict
 import copy
 
@@ -40,6 +41,8 @@ class GFMAssetHandler:
             df = pd.read_parquet(self.local_results_file)
             if 'sent_ti_path' not in df.columns:
                 df['sent_ti_path'] = None
+            if 'equi7tile_areas' not in df.columns:
+                df['equi7tile_areas'] = None
             return df
         else:
             # Initialize DataFrame with appropriate columns
@@ -50,9 +53,64 @@ class GFMAssetHandler:
                 'thumbnail_key': pd.Series(dtype='str'),
                 'main_cause': pd.Series(dtype='str'),
                 'geometry': pd.Series(dtype='str'), 
-                'bbox': pd.Series(dtype='str') 
+                'bbox': pd.Series(dtype='str'),
+                'equi7tile_areas': pd.Series(dtype='str'),
             }
             return pd.DataFrame(columns)
+
+    def calculate_equi7tile_areas(self, sent_ti_path: str, equi7tiles_list: list) -> tuple:
+        """
+        Calculate flooded area for provided equi7tiles using their observed water extent assets.
+        
+        Args:
+            sent_ti_path (str): Path to the Sentinel tile directory
+            equi7tiles_list (list): List of equi7tile identifiers to process
+            
+        Returns:
+            tuple: (dict of areas by equi7tile, wkt2 string)
+        """
+        equi7tile_areas = {}
+        wkt2_string = None
+
+        for equi7tile in equi7tiles_list:
+            # Get the OBSWATER file for this equi7tile
+            obswater_files = self.s3_utils.list_resources_with_string(
+                self.bucket_name, 
+                sent_ti_path, 
+                [f'{equi7tile}_ENSEMBLE_OBSWATER']
+            )
+            
+            if not obswater_files:
+                logging.warning(f"No OBSWATER file found for equi7tile {equi7tile}")
+                continue
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                file_path = obswater_files[0]
+                local_path = os.path.join(tmpdir, os.path.basename(file_path))
+                
+                try:
+                    # Download and process the file
+                    self.s3_utils.s3_client.download_file(
+                        self.bucket_name,
+                        file_path,
+                        local_path
+                    )
+                    
+                    # Calculate area
+                    pixel_count = RasterUtils.count_pixels(local_path)
+                    # GFM data has 20m resolution
+                    area = pixel_count * 20 * 20
+                    equi7tile_areas[equi7tile] = area
+                    
+                    # Get WKT2 string from first processed raster
+                    if wkt2_string is None:
+                        wkt2_string = RasterUtils.get_wkt2_string(local_path)
+                        
+                except Exception as e:
+                    logging.error(f"Error processing {file_path}: {str(e)}")
+                    equi7tile_areas[equi7tile] = None
+
+        return equi7tile_areas, wkt2_string
 
     def tile_assets_processed(self, sent_ti_path) -> bool:
         return sent_ti_path in self.results_df['sent_ti_path'].values
@@ -61,22 +119,34 @@ class GFMAssetHandler:
         row = self.results_df[self.results_df['sent_ti_path'] == sent_ti_path]
         if not row.empty:
             result = row.to_dict(orient='records')[0]
-            # Convert JSON strings back to objects if not empty
-            if result.get('geometry'):
-                result['geometry'] = json.loads(result['geometry'])
-            if result.get('bbox'):
-                result['bbox'] = json.loads(result['bbox'])
-            if result.get('flowfile_object'):
-                result['flowfile_object'] = json.loads(result['flowfile_object'])
+            # Convert JSON strings back to objects
+            for field in ['geometry', 'bbox', 'flowfile_object', 'equi7tile_areas']:
+                if result.get(field):
+                    result[field] = json.loads(result[field])
             print(f"read tile {sent_ti_path}")
             return result
         return {}
 
-    def handle_assets(self, sent_ti_path, event_id) -> Dict:
+    def handle_assets(self, sent_ti_path: str, event_id: str, equi7tiles_list: list) -> Dict:
+        """
+        Process and handle all assets for a given Sentinel tile path.
+        
+        Args:
+            sent_ti_path (str): Path to the Sentinel tile directory
+            event_id (str): DFO event identifier
+            equi7tiles_list (list): List of equi7tile identifiers to process
+            
+        Returns:
+            Dict: Dictionary containing all processed asset information
+        """
         results = {}
         gdf_geom, main_cause = self.process_geopackage(event_id)
         flowfile_object, flowfile_key = self.get_flowfile_object(sent_ti_path, self.bucket_name)
+
         thumbnail_key = self.create_and_add_thumbnail(self.s3_utils, self.bucket_name, sent_ti_path)
+
+        # Calculate areas for provided equi7tiles
+        equi7tile_areas, wkt2_string = self.calculate_equi7tile_areas(sent_ti_path, equi7tiles_list)
 
         gfm_geom_creator = GFMGeometryCreator(bucket_name=self.bucket_name, s3_client=self.s3_utils.s3_client, gdf_geom=gdf_geom)
         geometry_dict, bbox = gfm_geom_creator.make_item_geom(self.s3_utils.list_resources_with_string(self.bucket_name, sent_ti_path, ['footprint'])[0])
@@ -87,7 +157,8 @@ class GFMAssetHandler:
             "thumbnail_key": thumbnail_key,
             "main_cause": main_cause,
             "geometry": geometry_dict,  
-            "bbox": bbox  
+            "bbox": bbox,
+            "equi7tile_areas": equi7tile_areas
         }
 
         self.write_data_parquet(results)
@@ -95,8 +166,9 @@ class GFMAssetHandler:
 
     def get_flowfile_object(self, sent_ti_path, bucket_name):
         flowfile_key = self.s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['flows'])
+
         if flowfile_key:
-            flowfile_df = FlowfileUtils.download_flowfile(bucket_name, flowfile_key[0], self.s3_utils.s3_client)
+            flowfile_df = FlowfileUtils.download_flowfiles(bucket_name, flowfile_key, self.s3_utils.s3_client)
             flowstats = FlowfileUtils.extract_flowstats(flowfile_df)
             flowfile_ids = ["NWM_v3_flowfile"]
             return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, GFMInfo.columns_list), flowfile_key
@@ -117,29 +189,27 @@ class GFMAssetHandler:
             return thumbnail_s3_path
 
     def write_data_parquet(self, results):
-        # Create a deep copy of results to avoid modifying the original
+        # Create a deep copy to avoid modifying the original
         results_copy = copy.deepcopy(results)
 
         # Convert objects to JSON strings for Parquet storage
         for path, data in results_copy.items():
-            if 'flowfile_object' in data and isinstance(data['flowfile_object'], dict):
-                data['flowfile_object'] = json.dumps(data['flowfile_object'])
-            if 'geometry' in data and isinstance(data['geometry'], dict):
-                data['geometry'] = json.dumps(data['geometry'])
-            if 'bbox' in data and isinstance(data['bbox'], list):
-                data['bbox'] = json.dumps(data['bbox'])
+            for field in ['flowfile_object', 'geometry', 'bbox', 'equi7tile_areas']:
+                if field in data and (isinstance(data[field], (dict, list)) or data[field] is None):
+                    data[field] = json.dumps(data[field])
 
         new_df = pd.DataFrame.from_dict(results_copy, orient='index').reset_index().rename(columns={'index': 'sent_ti_path'})
 
-        # Check if sent_ti_path already exists and remove it
+        # Remove existing entries
         for sent_ti_path in new_df['sent_ti_path']:
             self.results_df = self.results_df[self.results_df['sent_ti_path'] != sent_ti_path]
 
         # Concatenate the new data
         self.results_df = pd.concat([self.results_df, new_df], ignore_index=True)
         
-        # Write the updated DataFrame to the local Parquet file
+        # Write to local Parquet file
         self.results_df.to_parquet(self.local_results_file, index=False)
+
 
     def process_geopackage(self, event_id):
         local_geopackage_path = '/tmp/dfo_all_usa_events_post_2015.gpkg'    

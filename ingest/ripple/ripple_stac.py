@@ -55,8 +55,8 @@ class RasterHandler:
         with rasterio.open(raster_path) as src:
             # Read the raster data
             data = src.read(1)
-            # Create mask for valid data (not no_data and not 0)
-            valid_data = (data != 255) & (data != 0)
+            # Create mask for valid data (not no_data) 
+            valid_data = (data != 255)
             # Get shapes of valid data areas
             geoms = list(shapes(valid_data.astype(np.uint8), transform=src.transform))
             # Convert to shapely geometries and filter for value=1

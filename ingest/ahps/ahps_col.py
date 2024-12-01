@@ -93,12 +93,12 @@ def process_gauge(gauge_path, agency, huc8, s3_utils, bucket_name, link_type, co
         geometry=geometry,
         bbox=bbox,
         datetime=datetime.now(timezone.utc),
-        hucs=["huc8"],
         properties={
             "title": f"HUC8-{huc8} gauge-{gauge} {agency} fim",
             "description": "Extents and depths associated with the HEC-RAS modelling domain around the National Weather Service gauge used to model the flows",
             "license": 'CC0-1.0',
             "extent_area (m)": asset_results["extent_area"],
+            "hucs": ["huc8"],
             "gauge": gauge,
             "flowfile": asset_results["flowfile"]["flowfile_object"],
             "magnitude": {"study magnitudes": asset_results["magnitudes"]}
@@ -110,6 +110,9 @@ def process_gauge(gauge_path, agency, huc8, s3_utils, bucket_name, link_type, co
     # Add wkt2 string using the projection extension
     ProjectionExtension.ext(item, add_if_missing=True)
     item.properties.update({"proj:wkt2":asset_results["wkt2_string"].replace('"', "'")})
+
+    #validate item
+    item.validate()
 
     collection.add_item(item)
 

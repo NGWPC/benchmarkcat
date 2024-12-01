@@ -98,6 +98,14 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
         end_date = event_df['flag_date'].max()
         start_date = parse_date(start_date).replace(tzinfo=timezone.utc)
         end_date = parse_date(end_date).replace(tzinfo=timezone.utc)
+        horizontal_datum = event_df['horizontalDatumName'].mode().iloc[0]
+        vertical_datum = event_df['verticalDatumName'].mode().iloc[0] if event_df['verticalDatumName'].mode().size > 0 else "No vertical datum"        
+        # Create WKT string using the datum information
+        try:
+            wkt_string = create_wkt_string(horizontal_datum, vertical_datum)
+        except ValueError as e:
+            logging.warning(f"Could not create WKT string for event {event_id}: {str(e)}")
+            wkt_string = None
 
          # Perform spatial join to find HUCs
         event_gdf = gpd.GeoDataFrame(geometry=[all_points], crs=event_df.crs)
@@ -114,9 +122,12 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
                 "start_datetime": start_date.isoformat(),
                 "end_datetime": end_date.isoformat(),
                 "point_count": len(points),
-                "hucs": huc8_list
+                "hucs": huc8_list,
+                "proj:wkt2": wkt_string
             }
         )
+
+        ProjectionExtension.ext(event_item, add_if_missing=True)
 
         # Create a GeoPackage for the event
         with tempfile.TemporaryDirectory() as gpkg_tmpdir:
@@ -174,6 +185,9 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
             event_item.properties["month_start"] = start_of_month.isoformat()
             event_item.properties["month_end"] = end_of_month.isoformat()
 
+        # validate item
+        event_item.validate()
+        
         # Add the event item to the top-level collection
         top_collection.add_item(event_item)
 
