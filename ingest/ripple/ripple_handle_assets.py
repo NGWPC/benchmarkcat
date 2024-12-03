@@ -41,7 +41,6 @@ class RippleFIMAssetHandler:
                 'extent_areas': pd.Series(dtype='str'),
                 'wkt2_string': pd.Series(dtype='str'),
                 'thumbnail': pd.Series(dtype='str'),  
-                'model_domains': pd.Series(dtype='str')
             }
             return pd.DataFrame(columns)
 
@@ -55,7 +54,7 @@ class RippleFIMAssetHandler:
         if not row.empty:
             result = row.to_dict(orient='records')[0]
             # Convert JSON strings back to objects
-            for field in ['geometry', 'bbox', 'magnitudes', 'extent_areas', 'model_domains']:
+            for field in ['geometry', 'bbox', 'magnitudes', 'extent_areas']:
                 if result.get(field):
                     try:
                         result[field] = json.loads(result[field])
@@ -68,7 +67,6 @@ class RippleFIMAssetHandler:
         results = {}
         magnitudes = []
         extent_areas = {}
-        model_domains = {}
     
         # Get list of tiff files and their magnitudes
         tiff_files = self.s3_utils.list_files_with_extensions(self.bucket_name, item_path, ['.tif'])
@@ -119,16 +117,12 @@ class RippleFIMAssetHandler:
                 # Calculate extent area only
                 extent_areas[magnitude] = RasterHandler.calculate_extent_area(local_tiff)
             
-                # Use the same domain for all magnitudes
-                model_domains[magnitude] = domain
-
         results[item_path] = {
             "source": source,
             "geometry": convex_hull,
             "bbox": bbox,
             "magnitudes": magnitudes,
             "extent_areas": extent_areas,
-            "model_domains": model_domains,
             "wkt2_string": wkt2_string,
             "thumbnail": thumbnail_path  
         }    
@@ -223,8 +217,6 @@ class RippleFIMAssetHandler:
                 data['magnitudes'] = json.dumps(data['magnitudes'])
             if data.get('extent_areas'):
                 data['extent_areas'] = json.dumps(data['extent_areas'], cls=NumpyJSONEncoder)
-            if data.get('model_domains'):
-                data['model_domains'] = json.dumps(data['model_domains'])
 
         new_df = pd.DataFrame.from_dict(results_copy, orient='index').reset_index().rename(columns={'index': 'item_path'})
     
