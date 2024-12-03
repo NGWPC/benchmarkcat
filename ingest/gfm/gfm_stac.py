@@ -113,7 +113,8 @@ class AssetUtils:
             return 'Advisory Flags'
         elif 'schedule' in tile_asset:
             return 'Schedule'
-        elif 'footprint' in tile_asset:
+        # add second clause after or since not all footprint files have footprint in them.
+        elif ('footprint' in tile_asset) or (tile_asset.startswith('S1') and tile_asset.endswith('.geojson')):
             return 'Footprint'
         elif 'metadata' in tile_asset:
             return 'Metadata'

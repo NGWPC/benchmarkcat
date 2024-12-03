@@ -1,12 +1,13 @@
 The workflow to download the assets to the OE (this should be formalized into a makefile at same point)
 
-0. Run script ap_setup_env.sh to setup env (this script should also work in test as long as "contrib" is mounted.
-1. Make sure you have valid AWS credentials in environment
-2. Download the current s3 static catalog to "bench_stac_aws": "aws cp s3 ... --recursive --ignore-assets-flag"
-3. cp "bench_stac_aws" to "bench_stac_rel_asset_hrefs"
-4. run the script "interleave_assets.py"
-5. cp "bench_stac_rel_asset_hrefs" to "bench_stac" it will take a while because now all the data is in the catalog directory
-6. run the script "update_interleaved_asset_href.py"
-7. Delete bench_stac_rel_asset_hrefs *if* "update_interleaved_asset_href.py" ran sucessfully.
+0. start a screen session. Need to do this since don't want to lose your terminal connection midway through
+1. Run script api_setup_env.sh to setup env using "source api_setup_env.sh". Need to run as source so you actually enter the environment. This script should also work in test as long as "contrib" is mounted.
+2. Make sure you have valid AWS credentials in environment
+3. Download the current s3 static catalog to "bench_stac_aws": "aws cp s3 ... --recursive --ignore-assets-flag"
+4. cp "bench_stac_aws" to "bench_stac_rel_asset_hrefs"
+5. run the script "interleave_assets.py"
+6. cp "bench_stac_rel_asset_hrefs" to "bench_stac" it will take a while because now all the data is in the catalog directory
+7. run the script "update_interleaved_asset_href.py"
+8. Delete bench_stac_rel_asset_hrefs *if* "update_interleaved_asset_href.py" ran sucessfully.
 
 The output should be a relative catalog with asset hrefs pointing to port 8000 on localhost so that assets can be served from the locally hosted version of the benchmark stac api. 

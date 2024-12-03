@@ -159,8 +159,8 @@ def create_item(date_id, sent_ti, geometry, bbox, start_datetime, end_datetime,
         "gsd": 20,
         "gfm_version": gfm_version,
         "flowfiles": flowfile_object,
-        "tile_total_inundated_area": equi7tile_areas,
-        "flood_ratios": flood_ratios 
+        "tile_total_inundated_area (m^2)": equi7tile_areas,
+        "flood_to_baseline_ratios": flood_ratios 
     }
     
     if orbit_state is not None:
@@ -196,11 +196,11 @@ def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_nam
 
 def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfile=False):
     if flowfile:
-        asset_id = "NWM_v3_flowfile"
+        asset_id = "NWM_ANA_flowfile"
         asset = pystac.Asset(
             href=s3_utils.generate_href(bucket_name, asset_path, link_type),
             roles=["data"],
-            description="NWM 3.0 flowfile see flowfiles key in properties for more information"
+            description="NWM flowfile produced from ANA data, see flowfiles key in properties for more information"
         )
     else:
         tile_asset = asset_path.strip('/').split('/')[-1]
@@ -224,6 +224,9 @@ def main():
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
 
     for date in dates:
+        #stopping here temporarily to look at items produced
+        if "2021-10" in date:
+            break
         print(f"===============processing {date}===============")
         process_date(date, s3_utils, args.bucket_name, args.link_type, 
                     collection, args.reprocess_assets, asset_handler)
