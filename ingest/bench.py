@@ -12,7 +12,8 @@ import rioxarray
 import rasterio
 import numpy as np
 from PIL import Image
-from botocore.exceptions import NoCredentialsError, ClientError
+from botocore.exceptions import NoCredentialsError, ClientError, ParamValidationError
+import requests
 
 class S3Utils:
     def __init__(self, s3_client):
@@ -154,19 +155,40 @@ class S3Utils:
     def generate_href(self, bucket_name, path, link_type, expiration=7*24*60*60):
         try:
             if link_type == 'url':
+                # Generate presigned URL
                 signed_url = self.s3_client.generate_presigned_url(
                     'get_object',
                     Params={'Bucket': bucket_name, 'Key': path},
                     ExpiresIn=expiration
                 )
-                return signed_url
+            
+                # Validate URL
+                try:
+                    response = requests.head(signed_url, timeout=5)
+                    is_valid = response.status_code == 200
+                except requests.RequestException as e:
+                    is_valid = False
+            
+                return signed_url, is_valid 
+            
             elif link_type == 'uri':
+                # Generate S3 URI
                 s3_uri = f"s3://{bucket_name}/{path}"
-                return s3_uri
+            
+                # Validate object exists
+                try:
+                    self.s3_client.head_object(Bucket=bucket_name, Key=path)
+                    is_valid = True
+                except (ClientError, ParamValidationError) as e:
+                    is_valid = False
+            
+                return s3_uri, is_valid 
+            
             else:
                 raise ValueError("link_type must be either 'url' or 'uri'")
+
         except NoCredentialsError:
-            return "Credentials not available"
+            raise ValueError("Credentials not available")
 
 
 class RasterUtils:

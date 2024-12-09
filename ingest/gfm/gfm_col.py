@@ -62,13 +62,16 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
             'GFM_layers': GFMInfo.layers
         })
     )
-
-    collection.assets['naming_conventions'] = pystac.Asset(
-        href=s3_utils.generate_href(bucket_name, f'{asset_object_key}/gfm/gfm_data_readme.pdf', link_type),
+    readme_href, is_valid = s3_utils.generate_href(bucket_name, f'{asset_object_key}gfm/gfm_data_readme.pdf', link_type)   
+    if is_valid:
+        collection.assets['naming_conventions'] = pystac.Asset(
+        href=readme_href,
         title="GFM Data Readme",
         description="This document contains the naming conventions for the GFM data.",
         media_type="application/pdf"
-    )
+        )
+    else:
+        print("Skipping gfm readme asset creation - invalid or inaccessible")
 
     item_assets_ext = ItemAssetsExtension.ext(collection, add_if_missing=True)
     item_assets_ext.item_assets = GFMInfo.assets
@@ -168,11 +171,11 @@ def create_item(event_id, main_cause, sent_ti, geometry, bbox, start_datetime, e
         "dfo_event_id": event_id,
         "proj:epsg": 27705,
         "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',
-        "gsd": 20,
+        "gsd (m)": 20,
         "gfm_version": gfm_version,
         "flowfiles": flowfile_object,
         "hucs": huc8_list,
-        "tile_total_inundated_area": equi7tile_areas
+        "tile_total_inundated_area (m^2)": equi7tile_areas
     }
     
     # Add orbit properties only if they exist
@@ -194,7 +197,10 @@ def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_nam
     if flowfile_key:
         equi7tile = None
         asset_id, asset = create_asset(flowfile_key, bucket_name, link_type, equi7tile, s3_utils, flowfile=True)
-        item.add_asset(asset_id, asset)
+        if asset:
+            item.add_asset(asset_id, asset)
+        else:
+            print(f"Skipping creating flowfile asset for {equi7tile} - invalid or inaccessible")
 
     for equi7tile in equi7tiles_list:
         tile_asset_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, [equi7tile])
@@ -203,30 +209,41 @@ def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_nam
         for tile_asset_path in tile_asset_list:
             asset_id, asset = create_asset(tile_asset_path, bucket_name, link_type, equi7tile, s3_utils)
             equi7tile_assets[equi7tile].append(asset_id)
-            item.add_asset(asset_id, asset)
-
+            if asset:
+                item.add_asset(asset_id, asset)
+            else:
+                print(f"Skipping creating asset for {asset_id} - invalid or inaccessible")
+ 
     item.properties['equi7tile_assets'] = equi7tile_assets
 
 def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfile=False):
     if flowfile:
         asset_id = "NWM_v3_flowfile"
-        asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, asset_path, link_type),
-            roles=["data"],
-            description="NWM 3.0 flowfile see flowfiles key in properties for more information"
-        )
+        flowfile_href, is_valid = s3_utils.generate_href(bucket_name, asset_path, link_type)
+        if is_valid:
+            asset = pystac.Asset(
+                href=flowfile_href,
+                roles=["data"],
+                description="NWM 3.0 flowfile see flowfiles key in properties for more information"
+            )
+        else:
+            asset = None
     else:
         tile_asset = asset_path.strip('/').split('/')[-1]
         asset_type = AssetUtils.determine_asset_type(tile_asset)
         role = 'thumbnail' if asset_type == 'Thumbnail' else 'metadata' if asset_type in ['Footprint', 'Metadata', 'Schedule'] else 'data'
         media_type = AssetUtils.get_media_type(tile_asset)
         asset_id = f"{equi7tile}_{asset_type.replace(' ', '_')}"
-        asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, asset_path, link_type),
-            roles=[role],
-            media_type=media_type,
-            title=f"{equi7tile} {asset_type}"
-        )
+        tile_asset_href, is_valid =s3_utils.generate_href(bucket_name, asset_path, link_type)
+        if is_valid:
+            asset = pystac.Asset(
+                href=tile_asset_href,
+                roles=[role],
+                media_type=media_type,
+                title=f"{equi7tile} {asset_type}"
+            )
+        else:
+            asset = None
     return asset_id, asset
 
 def main():

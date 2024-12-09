@@ -33,9 +33,44 @@ def parse_arguments():
     parser.add_argument('--bucket_name', type=str, default='fimc-data', help='S3 bucket name')
     parser.add_argument('--catalog_path', type=str, default='benchmark/stac-bench-cat/', help='Path to the STAC catalog in the S3 bucket')
     parser.add_argument('--asset_object_key', type=str, default='benchmark/rs/PI4/', help='Key for the asset object in the S3 bucket')
+    parser.add_argument('--hucs_object_key', type=str, default='benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg', help='Where to download the gpkg with the huc8 info')
     parser.add_argument('--reprocess_assets', action='store_true', help='Set to true to reprocess assets using GFMAssetHandler')
     parser.add_argument('--derived_metadata_path', type=str, default='benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet', help='S3 key for the derived metadata Parquet file created by asset handling code.')
     return parser.parse_args()
+
+def get_conus_neighbors(gpkg_path):
+    """
+    Loads country boundaries of Canada and Mexico from a geopackage file. This was necessary since filter_gfm.py regions aren't perfect to make AOI creation on the GFM api easier. Thus we are going to not catalog products that lie entirely within Canada and Mexico.
+    """
+
+    try:
+        # Read the geopackage
+        boundaries_gdf = gpd.read_file(gpkg_path)
+        
+        # Assuming your gpkg has a column named 'COUNTRY' or similar to identify countries
+        canada = boundaries_gdf[boundaries_gdf['COUNTRY'] == 'Canada'].geometry.iloc[0]
+        mexico = boundaries_gdf[boundaries_gdf['COUNTRY'] == 'Mexico'].geometry.iloc[0]
+        
+        return {
+            "canada": canada,
+            "mexico": mexico
+        }
+    except Exception as e:
+        raise ValueError(f"Failed to load country boundaries from {gpkg_path}: {str(e)}")
+
+def is_within_neighbor_countries(geometry, country_boundaries):
+    """Check if geometry lies completely within Canada or Mexico"""
+    geom_shape = shape(geometry) if isinstance(geometry, dict) else geometry
+    
+    # Check if geometry is completely within Canada
+    if country_boundaries["canada"].contains(geom_shape):
+        return True
+        
+    # Check if geometry is completely within Mexico
+    if country_boundaries["mexico"].contains(geom_shape):
+        return True
+        
+    return False
 
 def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils):
     collection = pystac.Collection(
@@ -62,13 +97,16 @@ def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils
             'GFM_layers': GFMInfo.layers
         })
     )
-
-    collection.assets['naming_conventions'] = pystac.Asset(
-        href=s3_utils.generate_href(bucket_name, 's3://fimc-data/benchmark/rs/gfm/gfm_data_readme.pdf', link_type),
+    readme_href, is_valid = s3_utils.generate_href(bucket_name, 's3://fimc-data/benchmark/rs/gfm/gfm_data_readme.pdf', link_type)
+    if is_valid:
+        collection.assets['naming_conventions'] = pystac.Asset(
+        href=readme_href,
         title="GFM Data Readme",
         description="This document contains the naming conventions for the GFM data.",
         media_type="application/pdf"
-    )
+        )
+    else:
+        print("Skipping gfm readme asset creation - invalid or inaccessible")
 
     item_assets_ext = ItemAssetsExtension.ext(collection, add_if_missing=True)
     item_assets_ext.item_assets = GFMInfo.assets
@@ -78,14 +116,14 @@ def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils
 def get_gfm_exp_dates(s3_utils, bucket_name, asset_object_key):
     return s3_utils.list_subdirectories(bucket_name, asset_object_key)
 
-def process_date(date_path, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler):
+def process_date(date_path, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf, country_boundaries):
     date_id = date_path.strip('/').split('/')[-1]
     logging.info(f"Indexing date: {date_id}")
     
     sent_ti_list = s3_utils.list_subdirectories(bucket_name, date_path)
     for sent_ti_path in sent_ti_list:
         process_tile(sent_ti_path, date_id, s3_utils, bucket_name, link_type, 
-                    collection, reprocess_assets, asset_handler)
+                    collection, reprocess_assets, asset_handler, hucs_gdf, country_boundaries)
 
 def get_flood_ratios(s3_utils, bucket_name, sent_ti_path):
     try:
@@ -97,7 +135,7 @@ def get_flood_ratios(s3_utils, bucket_name, sent_ti_path):
         logging.warning(f"No flood_ratios.json found for {sent_ti_path}: {str(e)}")
         return {}
 
-def process_tile(sent_ti_path, date_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler):
+def process_tile(sent_ti_path, date_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf=None, country_boundaries=None):
     sent_ti = sent_ti_path.strip('/').split('/')[-1]
     equi7tiles_list = [m.group() for filename in s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ['OBSWATER']) 
                        if len(os.path.basename(filename).split('_')) > 2 
@@ -114,7 +152,21 @@ def process_tile(sent_ti_path, date_id, s3_utils, bucket_name, link_type, collec
 
         
     geometry = asset_results["geometry"]
-    
+
+    # Check if geometry is within Canada or Mexico before proceeding
+    if country_boundaries and is_within_neighbor_countries(geometry, country_boundaries):
+        logging.info(f"Skipping {sent_ti} - geometry lies completely within Canada or Mexico")
+        return    
+
+    # Find intersecting HUC8s if HUCs data is provided
+    huc8_list = []
+    if hucs_gdf is not None:
+        # Create a GeoDataFrame with the flood geometry
+        flood_gdf = gpd.GeoDataFrame(geometry=[shape(geometry)], crs=hucs_gdf.crs)
+        # Perform spatial join
+        huc_join = gpd.sjoin(flood_gdf, hucs_gdf, how="left", predicate="intersects")
+        huc8_list = huc_join['HUC8'].tolist() if 'HUC8' in huc_join.columns else []
+
     bbox = asset_results["bbox"]
     flowfile_object = asset_results["flowfile_object"]
     equi7tile_areas = asset_results["equi7tile_areas"]
@@ -123,7 +175,7 @@ def process_tile(sent_ti_path, date_id, s3_utils, bucket_name, link_type, collec
 
     item = create_item(date_id, sent_ti, geometry, bbox, 
                       start_datetime, end_datetime, orbit_state, abs_orbit_num, 
-                      gfm_version, flowfile_object, equi7tile_areas, flood_ratios)  # Added flood_ratios
+                      gfm_version, flowfile_object, equi7tile_areas, flood_ratios, huc8_list)  
 
     SatExtension.ext(item, add_if_missing=True)
     ProjectionExtension.ext(item, add_if_missing=True)
@@ -148,7 +200,7 @@ def get_orbit_info(sent_ti_path, s3_utils, bucket_name):
 
 def create_item(date_id, sent_ti, geometry, bbox, start_datetime, end_datetime, 
                 orbit_state, abs_orbit_num, gfm_version, flowfile_object, 
-                equi7tile_areas, flood_ratios): 
+                equi7tile_areas, flood_ratios,huc8_list): 
     properties = {
         "title": f"GFM-expanded_{sent_ti}",
         "description": f"This item lists assets associated with the GFM scene {sent_ti}.",
@@ -156,9 +208,10 @@ def create_item(date_id, sent_ti, geometry, bbox, start_datetime, end_datetime,
         "gfm_data_take_end_datetime": end_datetime.isoformat(),
         "proj:epsg": 27705,
         "proj:wkt2": '+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs',
-        "gsd": 20,
+        "gsd (m)": 20,
         "gfm_version": gfm_version,
         "flowfiles": flowfile_object,
+        "hucs": huc8_list,
         "tile_total_inundated_area (m^2)": equi7tile_areas,
         "flood_to_baseline_ratios": flood_ratios 
     }
@@ -181,7 +234,10 @@ def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_nam
     if flowfile_key:
         equi7tile = None
         asset_id, asset = create_asset(flowfile_key, bucket_name, link_type, equi7tile, s3_utils, flowfile=True)
-        item.add_asset(asset_id, asset)
+        if asset:
+            item.add_asset(asset_id, asset)
+        else:
+            print(f"Skipping creating flowfile asset for {equi7tile} - invalid or inaccessible")
 
     for equi7tile in equi7tiles_list:
         tile_asset_list = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, [equi7tile])
@@ -190,30 +246,41 @@ def add_assets_to_item(item, sent_ti_path, equi7tiles_list, s3_utils, bucket_nam
         for tile_asset_path in tile_asset_list:
             asset_id, asset = create_asset(tile_asset_path, bucket_name, link_type, equi7tile, s3_utils)
             equi7tile_assets[equi7tile].append(asset_id)
-            item.add_asset(asset_id, asset)
+            if asset:
+                item.add_asset(asset_id, asset)
+            else:
+                print(f"Skipping creating asset for {asset_id} - invalid or inaccessible")
 
     item.properties['equi7tile_assets'] = equi7tile_assets
 
 def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfile=False):
     if flowfile:
         asset_id = "NWM_ANA_flowfile"
-        asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, asset_path, link_type),
-            roles=["data"],
-            description="NWM flowfile produced from ANA data, see flowfiles key in properties for more information"
-        )
+        flowfile_href, is_valid = s3_utils.generate_href(bucket_name, asset_path, link_type)
+        if is_valid:
+            asset = pystac.Asset(
+                href=flowfile_href,
+                roles=["data"],
+                description="NWM flowfile produced from ANA data, see flowfiles key in properties for more information"
+            )
+        else:
+            asset = None
     else:
         tile_asset = asset_path.strip('/').split('/')[-1]
         asset_type = AssetUtils.determine_asset_type(tile_asset)
         role = 'thumbnail' if asset_type == 'Thumbnail' else 'metadata' if asset_type in ['Footprint', 'Metadata', 'Schedule'] else 'data'
         media_type = AssetUtils.get_media_type(tile_asset)
         asset_id = f"{equi7tile}_{asset_type.replace(' ', '_')}"
-        asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, asset_path, link_type),
-            roles=[role],
-            media_type=media_type,
-            title=f"{equi7tile} {asset_type}"
-        )
+        tile_asset_href, is_valid = s3_utils.generate_href(bucket_name, asset_path, link_type)
+        if is_valid:
+            asset = pystac.Asset(
+                href=tile_asset_href,
+                roles=[role],
+                media_type=media_type,
+                title=f"{equi7tile} {asset_type}"
+            )
+        else:
+            asset = None
     return asset_id, asset
 
 def main():
@@ -222,14 +289,24 @@ def main():
     collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
-
-    for date in dates:
-        #stopping here temporarily to look at items produced
-        if "2021-10" in date:
-            break
-        print(f"===============processing {date}===============")
-        process_date(date, s3_utils, args.bucket_name, args.link_type, 
-                    collection, args.reprocess_assets, asset_handler)
+    # Load neighbor country boundaries to filter products completely outside CONUS
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(script_dir)
+    gpkg_path = os.path.join(parent_dir, "Mexico_Canada_boundaries.gpkg")
+    country_boundaries = get_conus_neighbors(gpkg_path)
+    
+    # Download and read HUCs data
+    _, hucs_gpkg = os.path.split(args.hucs_object_key)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_hucs_path = f"{tmpdir}/{hucs_gpkg}"
+        s3_utils.s3_client.download_file(args.bucket_name, args.hucs_object_key, local_hucs_path)
+        hucs_gdf = gpd.read_file(local_hucs_path)
+        for date in dates:
+            if "10" in date:
+                break
+            print(f"===============processing {date}===============")
+            process_date(date, s3_utils, args.bucket_name, args.link_type, 
+                        collection, args.reprocess_assets, asset_handler, hucs_gdf,country_boundaries)
 
     s3_utils.update_collection(collection, 'gfm-exp-collection', args.catalog_path, args.bucket_name)
     collection.validate()

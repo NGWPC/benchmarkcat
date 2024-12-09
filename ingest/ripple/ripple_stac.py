@@ -8,6 +8,8 @@ from rasterio.features import shapes
 import numpy as np
 from typing import Dict, List, Tuple
 import pystac
+import pyproj
+from shapely.ops import transform
 from pystac.extensions.item_assets import AssetDefinition
 from pyproj import CRS
 
@@ -71,8 +73,17 @@ class RasterHandler:
             convex_hull = multi_polygon.convex_hull
             # Get bbox
             bbox = list(multi_polygon.bounds)
-            
-            return mapping(convex_hull), bbox, mapping(multi_polygon)
+
+            # Convert the geometries to EPSG:4326
+            if src.crs != 'EPSG:4326':
+                project = pyproj.Transformer.from_crs(src.crs, 'EPSG:4326', always_xy=True).transform
+                convex_hull_4326 = transform(project, multi_polygon.convex_hull)
+                bbox = list(convex_hull_4326.bounds)
+            else:
+                convex_hull_4326 = multi_polygon.convex_hull
+                bbox = list(convex_hull_4326.bounds)            
+
+        return mapping(convex_hull_4326), bbox, mapping(multi_polygon)
 
     @staticmethod
     def get_wkt2_string(raster_path: str) -> str:

@@ -77,7 +77,8 @@ def create_item(huc8_path, huc8, asset_results, s3_utils, bucket_name, link_type
             "hucs" : [huc8],
             "magnitude": asset_results["magnitudes"],
             "flowfile": asset_results["flowfile"]["flowfile_object"],
-            "extent_area (m)": asset_results["extent_area"],
+            "extent_area (m^2)": asset_results["extent_area"],
+            "resolution (m)" : 3
         }
     )
 
@@ -96,55 +97,74 @@ def create_item(huc8_path, huc8, asset_results, s3_utils, bucket_name, link_type
 
 def create_assets(item, huc8_path, huc8, asset_results, s3_utils, bucket_name, link_type):
     # Add the thumbnail asset for the HUC8
+    thumbnail_href, is_valid =s3_utils.generate_href(bucket_name, asset_results["thumbnail"], link_type)
+
     if "thumbnail" in asset_results:
-        item.add_asset(
-            "thumbnail",
-            pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, asset_results["thumbnail"], link_type),
-                media_type="image/png",
-                roles=["thumbnail"],
-                title="Thumbnail Image"
+        if is_valid:
+            item.add_asset(
+                "thumbnail",
+                pystac.Asset(
+                    href=thumbnail_href,
+                    media_type="image/png",
+                    roles=["thumbnail"],
+                    title="Thumbnail Image"
+                )
             )
-        )
+        else:
+            print(f"Skipping thumbnail asset for huc {huc8} - invalid or inaccessible")
 
     # Add extents, depths, and flow files for magnitudes
     for magnitude in asset_results["magnitudes"]:
         # Add extent raster
         extent_tiff = asset_results["extent_paths"][magnitude]
-        item.add_asset(
-            f"{magnitude}_extent_raster",
-            pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, extent_tiff, link_type),
-                media_type="image/tiff; application=geotiff",
-                roles=["data"],
-                title=f"{magnitude} Year Flood Extent"
+        extent_href, is_valid = s3_utils.generate_href(bucket_name, extent_tiff, link_type)
+        if is_valid:
+            item.add_asset(
+                f"{magnitude}_extent_raster",
+                pystac.Asset(
+                    href=extent_href,
+                    media_type="image/tiff; application=geotiff",
+                    roles=["data"],
+                    title=f"{magnitude} Year Flood Extent"
+                )
             )
-        )
+        else:
+            print(f"Skipping extent asset for huc {huc8} magnitude {magnitude} - invalid or inaccessible")
+
         # Add depth raster
         if asset_results["depth_paths"] and magnitude in asset_results["depth_paths"]:
             depth_tiff = asset_results["depth_paths"][magnitude]
-            item.add_asset(
-                f"{magnitude}_depth_raster",
-                pystac.Asset(
-                    href=s3_utils.generate_href(bucket_name, depth_tiff, link_type),
-                    media_type="image/tiff; application=geotiff",
-                    roles=["data"],
-                    title=f"{magnitude} Year Flood Depth"
+            depth_href, is_valid = s3_utils.generate_href(bucket_name, depth_tiff, link_type)
+            if is_valid:
+                item.add_asset(
+                    f"{magnitude}_depth_raster",
+                    pystac.Asset(
+                        href=depth_href,
+                        media_type="image/tiff; application=geotiff",
+                        roles=["data"],
+                        title=f"{magnitude} Year Flood Depth"
+                    )
                 )
-            )
+            else:
+                print(f"Skipping depth asset for huc {huc8} magnitude {magnitude} - invalid or inaccessible")
 
         # Add flow file
         flowfile_key = asset_results["flowfile"]["flowfile_keys"][magnitude]
-        item.add_asset(
-            f"{magnitude}_flow_file",
-            pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, flowfile_key, link_type),
-                media_type="text/csv",
-                roles=["data"],
-                title=f"{magnitude} Year Flow Data",
-                description=f"The flow file of NWM hydrofabric feature ids and associated discharges for the {magnitude} year recurrence interval."
+        flow_href, is_valid = s3_utils.generate_href(bucket_name, flowfile_key, link_type)
+        if is_valid:
+            item.add_asset(
+                f"{magnitude}_flow_file",
+                pystac.Asset(
+                    href=flow_href,
+                    media_type="text/csv",
+                    roles=["data"],
+                    title=f"{magnitude} Year Flow Data",
+                    description=f"The flow file of NWM hydrofabric feature ids and associated discharges for the {magnitude} year recurrence interval."
+                )
             )
-        )
+        else:
+            print(f"Skipping flow asset for huc {huc8} magnitude {magnitude} - invalid or inaccessible")
+            
 
 def main():
     args = parse_arguments()

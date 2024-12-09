@@ -54,18 +54,17 @@ def create_hwm_collection():
             url='https://www.usgs.gov'
         )],
     )
-
     return collection
 
 def create_thumbnail(gdf, output_path):
     fig, ax = plt.subplots(figsize=(10, 10))
-    gdf.plot(ax=ax, color='blue', markersize=5)
+    gdf.plot(ax=ax, color='blue', markersize=9)
     ax.set_axis_off()
     plt.tight_layout()
     plt.savefig(output_path, dpi=100, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
     
-def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_key, link_type, asset_handler, reprocess_assets, top_collection):
+def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_key, link_type, asset_handler, reprocess_assets, top_collection, skip_events):
     _, hwm_gpkg = os.path.split(asset_object_key)
     _, hucs_gpkg = os.path.split(hucs_object_key)
 
@@ -86,7 +85,13 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
     
     for event_name, event_df in hwm_events:
         event_id = event_name.replace(" ", "_")
-        print(f"processing {event_id}")
+        
+        # Skip events that are in the skip_events list
+        if event_name in skip_events:
+            logging.info(f"Skipping event: {event_name}")
+            continue
+            
+        logging.info(f"Processing event: {event_name}")
 
         # Create a STAC item for the event
         points = event_df.geometry.tolist()
@@ -100,6 +105,7 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
         end_date = parse_date(end_date).replace(tzinfo=timezone.utc)
         horizontal_datum = event_df['horizontalDatumName'].mode().iloc[0]
         vertical_datum = event_df['verticalDatumName'].mode().iloc[0] if event_df['verticalDatumName'].mode().size > 0 else "No vertical datum"        
+
         # Create WKT string using the datum information
         try:
             wkt_string = create_wkt_string(horizontal_datum, vertical_datum)
@@ -107,14 +113,13 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
             logging.warning(f"Could not create WKT string for event {event_id}: {str(e)}")
             wkt_string = None
 
-         # Perform spatial join to find HUCs
+        # Perform spatial join to find HUCs
         event_gdf = gpd.GeoDataFrame(geometry=[all_points], crs=event_df.crs)
         huc_join = gpd.sjoin(event_gdf, hucs_gdf, how="left", predicate="intersects")
         huc8_list = huc_join['HUC8'].tolist() if 'HUC8' in huc_join.columns else []
 
         event_item = pystac.Item(
             id=f'{event_id}-item',
-            # Use convex hull around all the points as the item's geometry instead of the points themselves so that they render more quickly in stac-browser
             geometry=all_points.convex_hull.__geo_interface__,
             bbox=event_bbox,
             datetime=start_date,
@@ -138,14 +143,18 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
             s3_utils.s3_client.upload_file(event_gpkg_path, bucket_name, gpkg_key)
 
         # Add the GeoPackage as an asset to the event item
-        gpkg_asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, gpkg_key, link_type),
-            media_type="application/geopackage+sqlite3",
-            roles=["data"],
-            title=f"GeoPackage for {event_id}",
-            description="Contains point data and attributes for high water marks in this event"
-        )
-        event_item.add_asset("data", gpkg_asset)
+        gpkg_href, is_valid = s3_utils.generate_href(bucket_name, gpkg_key, link_type)
+        if is_valid:
+            gpkg_asset = pystac.Asset(
+                href=gpkg_href,
+                media_type="application/geopackage+sqlite3",
+                roles=["data"],
+                title=f"GeoPackage for {event_id}",
+                description="Contains point data and attributes for high water marks in this event"
+            )
+            event_item.add_asset("data", gpkg_asset)
+        else:
+            logging.warning(f"Skipping gpkg asset for {event_id} - invalid or inaccessible")
 
         # Create and add thumbnail
         with tempfile.TemporaryDirectory() as thumb_tmpdir:
@@ -154,14 +163,18 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
             thumbnail_key = f"benchmark/high_water_marks/usgs/thumbnails/{event_id}_thumbnail.png"
             s3_utils.s3_client.upload_file(thumbnail_path, bucket_name, thumbnail_key)
 
-        thumbnail_asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, thumbnail_key, link_type),
-            media_type="image/png",
-            roles=["thumbnail"],
-            title=f"Thumbnail for {event_id}",
-            description="Thumbnail of the event high water marks"
-        )
-        event_item.add_asset("thumbnail", thumbnail_asset)
+        thumbnail_href, is_valid = s3_utils.generate_href(bucket_name, thumbnail_key, link_type)
+        if is_valid:
+            thumbnail_asset = pystac.Asset(
+                href=thumbnail_href,
+                media_type="image/png",
+                roles=["thumbnail"],
+                title=f"Thumbnail for {event_id}",
+                description="Thumbnail of the event high water marks"
+            )
+            event_item.add_asset("thumbnail", thumbnail_asset)
+        else:
+            logging.warning(f"Skipping thumbnail asset for {event_id} - invalid or inaccessible")
 
         # Handle flowfile asset
         if asset_handler.event_processed(event_id) and not reprocess_assets:
@@ -170,12 +183,16 @@ def process_flood_events(s3_utils, bucket_name, asset_object_key, hucs_object_ke
             asset_results = asset_handler.handle_assets(flowfile_dir, event_id, points)
 
         event_item.properties['flowfiles'] = asset_results["flowfile_object"] 
-        flowfile_asset = pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, asset_results["flowfile_key"], link_type),
-            roles=["data"],
-            description="NWM 3.0 flowfile. see flowfiles key in properties for more information."
-        )
-        event_item.add_asset(f"{event_id}-flowfile", flowfile_asset)
+        flow_href, is_valid = s3_utils.generate_href(bucket_name, asset_results["flowfile_key"], link_type)
+        if is_valid:
+            flowfile_asset = pystac.Asset(
+                href=flow_href,
+                roles=["data"],
+                description="NWM 3.0 retrospective flowfile. see flowfiles key in properties for more information."
+            )
+            event_item.add_asset(f"{event_id}-flowfile", flowfile_asset)
+        else:
+            logging.warning(f"Skipping flowfile asset for {event_id} - invalid or inaccessible")
 
         # Update the temporal extent of the event item using event_month
         if asset_results.get("event_month") is not None:
@@ -196,7 +213,11 @@ def main():
     s3_utils = initialize_s3_utils()
     asset_handler = HWMAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
     top_collection = create_hwm_collection()
-    process_flood_events(s3_utils, args.bucket_name, args.asset_object_key, args.hucs_object_key, args.link_type, asset_handler, args.reprocess_assets, top_collection)
+    # list events to skip. Skipping USGS test events currently
+    skip_events = ["Flood Shakedown Test 2015"]
+    process_flood_events(s3_utils, args.bucket_name, args.asset_object_key, args.hucs_object_key, 
+                        args.link_type, asset_handler, args.reprocess_assets, top_collection, skip_events)
+
     s3_utils.update_collection(top_collection, 'hwm-collection', args.catalog_path, args.bucket_name)
     top_collection.validate()
     asset_handler.upload_modified_parquet()

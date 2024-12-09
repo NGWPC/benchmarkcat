@@ -97,8 +97,9 @@ def process_gauge(gauge_path, agency, huc8, s3_utils, bucket_name, link_type, co
             "title": f"HUC8-{huc8} gauge-{gauge} {agency} fim",
             "description": "Extents and depths associated with the HEC-RAS modelling domain around the National Weather Service gauge used to model the flows",
             "license": 'CC0-1.0',
-            "extent_area (m)": asset_results["extent_area"],
-            "hucs": ["huc8"],
+            "extent_area (m^2)": asset_results["extent_area"],
+            "hucs": [huc8],
+            "resolution (m)": 10, 
             "gauge": gauge,
             "flowfile": asset_results["flowfile"]["flowfile_object"],
             "magnitude": {"study magnitudes": asset_results["magnitudes"]}
@@ -117,56 +118,76 @@ def process_gauge(gauge_path, agency, huc8, s3_utils, bucket_name, link_type, co
     collection.add_item(item)
 
 def create_assets(item, gauge_path, gauge, asset_results, s3_utils, bucket_name, link_type):
-    # Add rating curve for gauge
-    item.add_asset(
-        "rating_curve",
-        pystac.Asset(
-            href=s3_utils.generate_href(bucket_name, f"{gauge_path}{gauge}_rating_curve.csv", link_type),
-            description="Rating curve CSV used for event stages",
-            media_type="text/csv",
-            roles=["data"]
-        )
-    )
 
-    # Add the thumbnail asset for the gauge
-    if "thumbnail" in asset_results:
+    # Add rating curve for gauge
+    ratingcurve_href, is_valid = s3_utils.generate_href(bucket_name, f"{gauge_path}{gauge}_rating_curve.csv", link_type)
+
+    if is_valid:
         item.add_asset(
-            "thumbnail",
+            "rating_curve",
             pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, asset_results["thumbnail"], link_type),
-                media_type="image/png",
-                roles=["thumbnail"],
-                title="Thumbnail Image"
+                href=ratingcurve_href,
+                description="Rating curve CSV used for event stages",
+                media_type="text/csv",
+                roles=["data"]
             )
         )
+    else:
+        print(f"Skipping rating curve asset for gauge {gauge} - invalid or inaccessible")
+
+    # Add the thumbnail asset for the gauge
+    thumbnail_href, is_valid =s3_utils.generate_href(bucket_name, asset_results["thumbnail"], link_type)
+
+    if "thumbnail" in asset_results:
+        if is_valid:
+            item.add_asset(
+                "thumbnail",
+                pystac.Asset(
+                    href=thumbnail_href,
+                    media_type="image/png",
+                    roles=["thumbnail"],
+                    title="Thumbnail Image"
+                )
+            )
+    else:
+        print(f"Skipping thumbnail asset for gauge {gauge} - invalid or inaccessible")
 
     # Add extents and flowfiles for all the magnitudes
     for magnitude in asset_results["magnitudes"]:
         for tiff_path in asset_results["extent_paths"][magnitude]:
-            item.add_asset(
-                f"{magnitude}_extent_raster",
-                pystac.Asset(
-                    href=s3_utils.generate_href(bucket_name, tiff_path, link_type),
-                    media_type="image/tiff; application=geotiff",
-                    roles=["data"],
-                    title=f"{magnitude} Flood Extent"
+            extent_href, is_valid =s3_utils.generate_href(bucket_name, tiff_path, link_type)
+            if is_valid:
+                item.add_asset(
+                    f"{magnitude}_extent_raster",
+                    pystac.Asset(
+                        href=extent_href,
+                        media_type="image/tiff; application=geotiff",
+                        roles=["data"],
+                        title=f"{magnitude} Flood Extent"
+                    )
                 )
-            )
+            else:
+                print(f"Skipping extent asset for magnitude {magnitude} at gauge {gauge} - invalid or inaccessible")
+
         # Find the flowfile key for the current magnitude
         flowfile_key = next(
             key for key in asset_results["flowfile"]["flowfile_keys"] if magnitude in key
         )
-
-        item.add_asset(
-            f"{magnitude}_flow_file",
-            pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, flowfile_key, link_type),
-                media_type="text/csv",
-                roles=["data"],
-                title=f"{magnitude} flood magnitude flowfile Data",
-                description=f"The flow file of NWM hydrofabric feature ids and associated discharges for this gauge domain's {magnitude} flood magnitude."
+        
+        flow_href, is_valid = s3_utils.generate_href(bucket_name, flowfile_key, link_type)
+        if is_valid:
+            item.add_asset(
+                f"{magnitude}_flow_file",
+                pystac.Asset(
+                    href=flow_href,
+                    media_type="text/csv",
+                    roles=["data"],
+                    title=f"{magnitude} flood magnitude flowfile Data",
+                    description=f"The flow file of NWM hydrofabric feature ids and associated discharges for this gauge domain's {magnitude} flood magnitude."
+                )
             )
-        )
+        else:
+            print(f"Skipping flowfile asset for magnitude {magnitude} at gauge {gauge} - invalid or inaccessible")
 
 def main():
     args = parse_arguments()

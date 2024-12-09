@@ -58,16 +58,20 @@ def create_ripple_collection(s3_utils, bucket_name, asset_object_key, link_type,
         flowfile_info["flowfile_ids"],
         flowfile_info["flowfile_keys"]
     ):
-        collection.add_asset(
-            flowfile_id,
-            pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, flowfile_key, link_type),
-                title=f"CONUS Flow Data for {flowfile_id.split('_')[2]}",
-                description=f"Continental US flow data for {flowfile_id.split('_')[2]} flood magnitude",
-                media_type="text/csv",
-                roles=["data"]
+        flow_href, is_valid = s3_utils.generate_href(bucket_name, flowfile_key, link_type)
+        if is_valid:
+            collection.add_asset(
+                flowfile_id,
+                pystac.Asset(
+                    href=flow_href,
+                    title=f"CONUS Flow Data for {flowfile_id.split('_')[2]}",
+                    description=f"Continental US flow data for {flowfile_id.split('_')[2]} flood magnitude",
+                    media_type="text/csv",
+                    roles=["data"]
+                )
             )
-        )
+        else:
+            print(f"Skipping flowfile asset for flowfile_id {flowfile_id} - invalid or inaccessible")
 
     item_assets_ext = ItemAssetsExtension.ext(collection, add_if_missing=True)
     item_assets_ext.item_assets = RippleInfo.assets
@@ -110,10 +114,11 @@ def process_source_directory(source_path, source, s3_utils, bucket_name, link_ty
                 "description": f"Flood inundation mapping for {identifier} using {source.upper()} data",
                 "source": source,
                 "magnitudes": asset_results["magnitudes"],
-                "extent_areas (sq. m)": extent_areas,  
+                "extent_areas (m^2)": extent_areas,  
                 "hucs": hucs_list,
                 "flows2fim_version" : "0_2_0",
-                "ripple_version" : "0.7.0"
+                "ripple_version" : "0.7.0",
+                "resolution (m)" : 3
             }
         )
 
@@ -123,51 +128,69 @@ def process_source_directory(source_path, source, s3_utils, bucket_name, link_ty
 
         # Add thumbnail
         if "thumbnail" in asset_results and asset_results["thumbnail"]:
-            item.add_asset(
-                "thumbnail",
-                pystac.Asset(
-                    href=s3_utils.generate_href(bucket_name, asset_results["thumbnail"], link_type),
-                    media_type="image/png",
-                    roles=["thumbnail"],
-                    title="Extent thumbnail"
+            thumbnail_href, is_valid =s3_utils.generate_href(bucket_name, asset_results["thumbnail"], link_type)
+            if is_valid:
+                item.add_asset(
+                    "thumbnail",
+                    pystac.Asset(
+                        href=thumbnail_href,
+                        media_type="image/png",
+                        roles=["thumbnail"],
+                        title="Extent thumbnail"
+                    )
                 )
-            )
+            else:
+                print(f"Skipping thumbnail extent asset for {identifier} - invalid or inaccessible")
 
         # Add model domain boundary geopackage
-        item.add_asset(
-            "model_domain",
-            pystac.Asset(
-                href=s3_utils.generate_href(bucket_name, f"{subdir}model_domain.gpkg", link_type),
-                media_type="application/geopackage+sqlite3",
-                roles=["data"],
-                title="Model Domain Boundary"
+        domain_href, is_valid =s3_utils.generate_href(bucket_name, f"{subdir}model_domain.gpkg", link_type)
+        if is_valid:
+            item.add_asset(
+                "model_domain",
+                pystac.Asset(
+                    href=domain_href,
+                    media_type="application/geopackage+sqlite3",
+                    roles=["data"],
+                    title="Model Domain Boundary"
+                )
             )
-        )
+        else:
+            print(f"Skipping model domain asset for {identifier} - invalid or inaccessible")
 
         # Add assets for each magnitude
         for magnitude in asset_results["magnitudes"]:
             # Add extent raster
             if 'mip' in source:
-                item.add_asset(
-                    f"{magnitude}_extent",
-                    pystac.Asset(
-                        href=s3_utils.generate_href(bucket_name, f"{subdir}{magnitude}_extent_f2f_ver_0_2_0.tif", link_type),
-                        media_type="image/tiff; application=geotiff",
-                        roles=["data"],
-                        title=f"{magnitude} Flood Extent"
+                extent_href, is_valid =s3_utils.generate_href(bucket_name, f"{subdir}{magnitude}_extent_f2f_ver_0_2_0.tif", link_type)
+                if is_valid:
+                    item.add_asset(
+                        f"{magnitude}_extent",
+                        pystac.Asset(
+                            href=extent_href,
+                            media_type="image/tiff; application=geotiff",
+                            roles=["data"],
+                            title=f"{magnitude} Flood Extent"
+                        )
                     )
-                )
+                else:
+                    print(f"Skipping extent asset for magnitude {magnitude} for {identifier} - invalid or inaccessible")
+
             else:
                 common_name = identifier.split('_')[1] 
-                item.add_asset(
-                    f"{magnitude}_extent",
-                    pystac.Asset(
-                        href=s3_utils.generate_href(bucket_name, f"{subdir}{magnitude}_{common_name}_extent_f2f_ver_0_2_0.tif", link_type),
-                        media_type="image/tiff; application=geotiff",
-                        roles=["data"],
-                        title=f"{magnitude} Flood Extent"
+                extent_href, is_valid=s3_utils.generate_href(bucket_name, f"{subdir}{magnitude}_{common_name}_extent_f2f_ver_0_2_0.tif", link_type)
+                if is_valid:
+                    item.add_asset(
+                        f"{magnitude}_extent",
+                        pystac.Asset(
+                            href=extent_href,
+                            media_type="image/tiff; application=geotiff",
+                            roles=["data"],
+                            title=f"{magnitude} Flood Extent"
+                        )
                     )
-                )
+                else:
+                    print(f"Skipping extent asset for magnitude {magnitude} for {identifier} - invalid or inaccessible")
+
         # validate item
         item.validate()
         
