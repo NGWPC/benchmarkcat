@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # Exit on any error
@@ -9,27 +10,33 @@ log_message() {
 }
 
 # Parse command line arguments
-while getopts "o:l:c:s:k:" opt; do
+while getopts "o:l:s:k:n:" opt; do
     case $opt in
         o) OUTPUT_DIR="$OPTARG";;
         l) LOG_DIR="$OPTARG";;
-        c) COLLECTIONS_FILE="$OPTARG";;
         s) S3_PATH="$OPTARG";;
         k) SKIP_EXISTING="$OPTARG";;
-        ?) echo "Usage: $0 -o output_dir -l log_dir -c collections_file -s s3_path -k {true|false}"; exit 1;;
+        n) N_WORKERS="$OPTARG";;
+        ?) echo "Usage: $0 -o output_dir -l log_dir -s s3_path -k {true|false} -n n_workers"; exit 1;;
     esac
 done
 
 # Validate required arguments
-if [ -z "$OUTPUT_DIR" ] || [ -z "$LOG_DIR" ] || [ -z "$COLLECTIONS_FILE" ] || [ -z "$S3_PATH" ] || [ -z "$SKIP_EXISTING" ]; then
-    echo "Usage: $0 -o output_dir -l log_dir -c collections_file -s s3_path -k {true|false}"
-    echo "Example: $0 -o ./output -l ./logs -c collections.txt -s s3://fimc-data/benchmark/stac-bench-cat/ -k true"
+if [ -z "$OUTPUT_DIR" ] || [ -z "$LOG_DIR" ] || [ -z "$S3_PATH" ] || [ -z "$SKIP_EXISTING" ] || [ -z "$N_WORKERS" ]; then
+    echo "Usage: $0 -o output_dir -l log_dir -s s3_path -k {true|false} -n n_workers"
+    echo "Example: $0 -o ./output -l ./logs -s s3://fimc-data/benchmark/stac-bench-cat/ -k true -n 4"
     exit 1
 fi
 
 # Validate skip_existing argument
 if [ "$SKIP_EXISTING" != "true" ] && [ "$SKIP_EXISTING" != "false" ]; then
     echo "Error: -k argument must be either 'true' or 'false'"
+    exit 1
+fi
+
+# Validate n_workers argument
+if ! [[ "$N_WORKERS" =~ ^[0-9]+$ ]] || [ "$N_WORKERS" -lt 1 ]; then
+    echo "Error: -n argument must be a positive integer"
     exit 1
 fi
 
@@ -44,6 +51,7 @@ touch "$LOG_FILE"
 
 log_message "Starting STAC catalog migration process"
 log_message "Skip existing assets: $SKIP_EXISTING"
+log_message "Number of workers: $N_WORKERS"
 
 # Sync catalog structure from S3 (excluding assets)
 log_message "Syncing catalog structure from S3: $S3_PATH to $OUTPUT_DIR"
@@ -59,7 +67,7 @@ conda activate bench_env || {
     log_message "Failed to activate conda environment. Creating new environment..."
     conda create --name bench_env python=3.11.5 -y
     conda activate bench_env
-    pip install pystac boto3
+    pip install pystac boto3 dask distributed bokeh
 }
 
 # Process the STAC catalog
@@ -76,6 +84,7 @@ python stac_processor.py \
     --output-dir "$OUTPUT_DIR" \
     --log-dir "$LOG_DIR" \
     --base-url "http://0.0.0.0:8000/" \
+    --n-workers "$N_WORKERS" \
     $SKIP_FLAG || {
     log_message "ERROR: Failed to process STAC catalog"
     exit 1
@@ -84,11 +93,13 @@ python stac_processor.py \
 # Upload to STAC API
 log_message "Uploading to STAC API"
 
-# Read collections from file
-while IFS= read -r collection_id || [[ -n "$collection_id" ]]; do
-    # Skip empty lines and comments
-    [[ -z "$collection_id" || "$collection_id" =~ ^# ]] && continue
+# Find all collection directories (excluding catalog.json and hidden directories)
+for collection_dir in "$OUTPUT_DIR"/*/; do
+    # Skip if not a directory or if it's a hidden directory
+    [[ ! -d "$collection_dir" ]] && continue
+    [[ $(basename "$collection_dir") == .* ]] && continue
     
+    collection_id=$(basename "$collection_dir")
     log_message "Processing collection: $collection_id"
     
     # Delete existing collection
@@ -105,6 +116,7 @@ while IFS= read -r collection_id || [[ -n "$collection_id" ]]; do
          "http://0.0.0.0:8082/collections" || {
         log_message "ERROR: Failed to upload collection: $collection_id"
         continue
+    }
     
     # Upload items
     log_message "Uploading items for collection: $collection_id"
@@ -117,6 +129,6 @@ while IFS= read -r collection_id || [[ -n "$collection_id" ]]; do
             log_message "ERROR: Failed to upload item: $item_file"
         }
     done
-done < "$COLLECTIONS_FILE"
+done
 
 log_message "STAC catalog migration complete"

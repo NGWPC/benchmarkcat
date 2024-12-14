@@ -6,8 +6,8 @@ The workflow to download the assets to the OE (this should be formalized into a 
 ./stac-migration.sh \
     -o ./bench_stac \
     -l ./transferlogs \
-    -c collections.txt \
     -s s3://fimc-data/benchmark/stac-bench-cat/ \
-    -k true
+    -k true /
+    -n 7
 
 The output should be a relative catalog with asset hrefs pointing to port 8000 on localhost so that assets can be served from the locally hosted version of the benchmark stac api. 
