@@ -1,8 +1,9 @@
 TestData/
 .venv/
-*egg-info
-__pycache__
-
+*egg-info/
+__pycache__/
+*.pyc
+cache/
 .aider*
 *.parquet
 *.gpkg
