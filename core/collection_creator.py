@@ -10,7 +10,6 @@ class CollectionCreator(ABC):
         self.collection = None
         self.load_config()
         self.create_collection()
-
     def load_config(self):
         # Load and validate the configuration
         required_fields = [
