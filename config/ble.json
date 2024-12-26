@@ -5,6 +5,11 @@
     "title": "Base Level Engineering Flood Risk Data",
     "description": "This collection contains Base Level Engineering (BLE) flood risk data produced by FEMA for various regions.",
     "license": "CC-BY-4.0",
+    "keywords": ["flood", "BLE", "Base Level Engineering", "model", "extents", "depths"],
+    "extent": {
+      "spatial": [-179.9, 7.2, -64.5, 61.8],
+      "temporal": ["2010-01-01T00:00:00Z", "2023-12-31T23:59:59Z"]
+    },
     "providers": [
       {
         "name": "FEMA",
@@ -12,11 +17,6 @@
         "url": "https://www.fema.gov/"
       }
     ],
-    "keywords": ["flood", "BLE", "Base Level Engineering", "model", "extents", "depths"],
-    "extent": {
-      "spatial": [-179.9, 7.2, -64.5, 61.8],
-      "temporal": ["2010-01-01T00:00:00Z", "2023-12-31T23:59:59Z"]
-    },
     "summaries": {
       "platform": ["Modeling"],
       "instruments": ["Hydraulic Models"],

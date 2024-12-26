@@ -3,20 +3,9 @@ from typing import Dict, List, Optional, Union, Any
 import pystac
 from pystac.extensions.item_assets import ItemAssetsExtension
 import logging
-from pydantic import BaseModel, ValidationError
-class CollectionConfig(BaseModel):
-    dataset_name: str
-    description: str
-    title: str
-    keywords: List[str]
-    spatial_extent: List[float]
-    temporal_extent: List[Optional[Union[str, None]]]
-    license: str
-    providers: Optional[List[Dict[str, Any]]] = None
-    summaries: Optional[Dict[str, Any]] = None
-    collection_common_properties: Dict[str, Any]
-    item_common_properties: Optional[Dict[str, Any]] = None
-    item_assets: Optional[Dict[str, Any]] = None
+from pydantic import BaseModel, ValidationError, create_model
+import json
+import os
 
 class CollectionCreator(ABC):
     def __init__(self, config, s3_utils):
@@ -28,25 +17,66 @@ class CollectionCreator(ABC):
 
     def load_config(self):
         try:
-            validated_config = CollectionConfig(**self.config)
-            self.config = validated_config.dict()
-            self.collection_common_properties = self.config['collection_common_properties']
+            # Load cross-collection schema
+            schema_path = os.path.join('config', 'cross_collection.json')
+            with open(schema_path, 'r') as f:
+                cross_collection_schema = json.load(f)
+
+            # Convert JSON Schema to Pydantic model
+            CrossCollectionModel = self.create_pydantic_model_from_schema(cross_collection_schema)
+
+            # Extract cross-collection properties from config
+            cross_collection_props = self.config.get('collection_properties', {})
+
+            # Validate properties using Pydantic
+            validated_props = CrossCollectionModel(**cross_collection_props)
+
+            # Update config with validated properties
+            self.config['collection_properties'] = validated_props.dict()
+
         except ValidationError as e:
             raise ValueError(f"Config validation error: {e}")
 
+    def create_pydantic_model_from_schema(self, schema: Dict[str, Any]) -> BaseModel:
+        # Helper function to map JSON Schema types to Pydantic types
+        def map_type(json_type):
+            type_mapping = {
+                "string": str,
+                "number": float,
+                "integer": int,
+                "boolean": bool,
+                "array": List[Any],
+                "object": Dict[str, Any],
+            }
+            return type_mapping.get(json_type, Any)
+
+        # Generate fields for Pydantic model
+        fields = {}
+        properties = schema.get('properties', {})
+        required_fields = schema.get('required', [])
+
+        for field_name, field_info in properties.items():
+            field_type = map_type(field_info.get('type', 'string'))
+            default = ... if field_name in required_fields else None
+            fields[field_name] = (field_type, default)
+
+        # Create Pydantic model dynamically
+        return create_model('CrossCollectionModel', **fields)
+
     def create_collection(self):
+        collection_props = self.config['collection_properties']
         self.collection = pystac.Collection(
-            id=self.config['dataset_name'],
-            description=self.config['description'],
-            title=self.config['title'],
-            keywords=self.config.get('keywords', []),
+            id=collection_props['id'],
+            description=collection_props['description'],
+            title=collection_props['title'],
+            keywords=collection_props.get('keywords', []),
             extent=pystac.Extent(
-                spatial=pystac.SpatialExtent([self.config['spatial_extent']]),
-                temporal=pystac.TemporalExtent([self.config['temporal_extent']])
+                spatial=pystac.SpatialExtent([collection_props['extent']['spatial']]),
+                temporal=pystac.TemporalExtent([collection_props['extent']['temporal']])
             ),
-            license=self.config['license'],
-            providers=self.config.get('providers', []),
-            summaries=self.config.get('summaries', None)
+            license=collection_props['license'],
+            providers=collection_props.get('providers', []),
+            summaries=collection_props.get('summaries', None)
         )
         self.apply_common_collection_properties()
         # Set up Item Assets if provided
