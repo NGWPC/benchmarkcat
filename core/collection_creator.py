@@ -10,8 +10,11 @@ class CollectionCreator(ABC):
         self.collection = None
         self.load_config()
         self.create_collection()
+
     def load_config(self):
         # Load and validate the configuration
+        # modify this load_config to use pydantic to validate. I also want to read a specific object from my config json (namely an object called common_collection_fields that contains a dictionary of ai!
+
         required_fields = [
             'dataset_name', 'description', 'title', 'keywords',
             'spatial_extent', 'temporal_extent', 'license'
