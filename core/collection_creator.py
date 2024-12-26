@@ -1,7 +1,23 @@
 from abc import ABC, abstractmethod
+from typing import Dict, List, Optional, Union, Any
 import pystac
 from pystac.extensions.item_assets import ItemAssetsExtension
 import logging
+from pydantic import BaseModel, ValidationError
+
+class CollectionConfig(BaseModel):
+    dataset_name: str
+    description: str
+    title: str
+    keywords: List[str]
+    spatial_extent: List[float]
+    temporal_extent: List[Optional[Union[str, None]]]
+    license: str
+    providers: Optional[List[Dict[str, Any]]] = None
+    summaries: Optional[Dict[str, Any]] = None
+    collection_common_properties: Dict[str, Any]
+    item_common_properties: Optional[Dict[str, Any]] = None
+    item_assets: Optional[Dict[str, Any]] = None
 
 class CollectionCreator(ABC):
     def __init__(self, config, s3_utils):
@@ -12,16 +28,12 @@ class CollectionCreator(ABC):
         self.create_collection()
 
     def load_config(self):
-        # Load and validate the configuration
-        # modify this load_config to use pydantic to validate. I also want to read a specific object from my config json (namely an object called common_collection_fields that contains a dictionary of ai!
-
-        required_fields = [
-            'dataset_name', 'description', 'title', 'keywords',
-            'spatial_extent', 'temporal_extent', 'license'
-        ]
-        for field in required_fields:
-            if field not in self.config:
-                raise ValueError(f"Missing required config field: {field}")
+        try:
+            validated_config = CollectionConfig(**self.config)
+            self.config = validated_config.dict()
+            self.collection_common_properties = self.config['collection_common_properties']
+        except ValidationError as e:
+            raise ValueError(f"Config validation error: {e}")
 
     def create_collection(self):
         self.collection = pystac.Collection(
