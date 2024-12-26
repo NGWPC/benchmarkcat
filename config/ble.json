@@ -1,1 +1,73 @@
-# lets create a draft of this config file. I want it to have several top level objects: "cross_collection_properties" for collection properties that will be included across all collections, "collection_properties" for properties that are specific to this collection, "cross_item_properties" for item properties that will be included across all items, "item_properties" for properties that are specific to the items in this collection, "read_write_paths" that will contain the information needed my collection creation scripts will need to read and write from my s3 bucket. "collection_asset_info" which will contain the information about the assets contained in a collection and its items.  Use the gfm collection scripts as an example of the data I would put into each object ai!
+{
+  "cross_collection_properties": {
+    "license": "CC-BY-4.0",
+    "providers": [
+      {
+        "name": "FEMA",
+        "roles": ["producer", "processor", "licensor"],
+        "url": "https://www.fema.gov/"
+      }
+    ],
+    "keywords": ["flood", "BLE", "Base Level Engineering"]
+  },
+  "collection_properties": {
+    "id": "ble-collection",
+    "dataset_name": "ble",
+    "title": "Base Level Engineering Flood Risk Data",
+    "description": "This collection contains Base Level Engineering (BLE) flood risk data produced by FEMA for various regions.",
+    "extent": {
+      "spatial": [-179.9, 7.2, -64.5, 61.8],
+      "temporal": ["2010-01-01T00:00:00Z", "2023-12-31T23:59:59Z"]
+    },
+    "summaries": {
+      "platform": ["Modeling"],
+      "instruments": ["Hydraulic Models"],
+      "datetime": ["2010-01-01T00:00:00Z", null],
+      "providers": ["FEMA"]
+    }
+  },
+  "cross_item_properties": {
+    "platform": "Modeling",
+    "instruments": ["Hydrologic", "Hydraulic"],
+    "gsd": null
+  },
+  "item_properties": {
+    "model_version": "BLE v1.0",
+    "region": "Specific region name",
+    "data_quality": "Verified"
+  },
+  "read_write_paths": {
+    "bucket_name": "fimc-data",
+    "catalog_path": "benchmark/stac-bench-cat/",
+    "asset_object_key": "benchmark/rs/ble/",
+    "derived_metadata_path": "benchmark/stac-bench-cat/assets/derived-asset-data/ble_collection.parquet"
+  },
+  "collection_asset_info": {
+    "assets": {
+      "thumbnail": {
+        "title": "Flood Extent Thumbnail",
+        "description": "A thumbnail image showing the flood extent for quick visualization.",
+        "media_type": "image/png",
+        "roles": ["thumbnail"]
+      },
+      "flood-depth": {
+        "title": "Flood Depth Raster",
+        "description": "GeoTIFF raster file containing flood depth data.",
+        "media_type": "image/tiff; application=geotiff",
+        "roles": ["data"]
+      },
+      "inundation-extent": {
+        "title": "Inundation Extent Shapefile",
+        "description": "Vector file showing the extent of inundation areas.",
+        "media_type": "application/geo+json",
+        "roles": ["data"]
+      },
+      "metadata": {
+        "title": "BLE Item Metadata",
+        "description": "Metadata associated with the BLE item.",
+        "media_type": "application/json",
+        "roles": ["metadata"]
+      }
+    }
+  }
+}
