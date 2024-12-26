@@ -1,6 +1,9 @@
-## edit my ble.json file now that you can see the data specific and common across the ble, ahps, and gfm collections ai! 
 {
-  "cross_collection_properties": {
+  "collection_properties": {
+    "id": "ble-collection",
+    "dataset_name": "ble",
+    "title": "Base Level Engineering Flood Risk Data",
+    "description": "This collection contains Base Level Engineering (BLE) flood risk data produced by FEMA for various regions.",
     "license": "CC-BY-4.0",
     "providers": [
       {
@@ -9,13 +12,7 @@
         "url": "https://www.fema.gov/"
       }
     ],
-    "keywords": ["flood", "BLE", "Base Level Engineering"]
-  },
-  "collection_properties": {
-    "id": "ble-collection",
-    "dataset_name": "ble",
-    "title": "Base Level Engineering Flood Risk Data",
-    "description": "This collection contains Base Level Engineering (BLE) flood risk data produced by FEMA for various regions.",
+    "keywords": ["flood", "BLE", "Base Level Engineering", "model", "extents", "depths"],
     "extent": {
       "spatial": [-179.9, 7.2, -64.5, 61.8],
       "temporal": ["2010-01-01T00:00:00Z", "2023-12-31T23:59:59Z"]
@@ -27,12 +24,10 @@
       "providers": ["FEMA"]
     }
   },
-  "cross_item_properties": {
+  "item_properties": {
     "platform": "Modeling",
     "instruments": ["Hydrologic", "Hydraulic"],
-    "gsd": null
-  },
-  "item_properties": {
+    "gsd": 3,
     "model_version": "BLE v1.0",
     "region": "Specific region name",
     "data_quality": "Verified"
@@ -40,34 +35,34 @@
   "read_write_paths": {
     "bucket_name": "fimc-data",
     "catalog_path": "benchmark/stac-bench-cat/",
-    "asset_object_key": "benchmark/rs/ble/",
+    "asset_object_key": "benchmark/high_resolution_validation_data_ble/",
     "derived_metadata_path": "benchmark/stac-bench-cat/assets/derived-asset-data/ble_collection.parquet"
   },
   "collection_asset_info": {
     "assets": {
       "thumbnail": {
-        "title": "Flood Extent Thumbnail",
-        "description": "A thumbnail image showing the flood extent for quick visualization.",
+        "title": "Extent Thumbnail",
+        "description": "A thumbnail image showing one of the modeled flood extents for the region.",
         "media_type": "image/png",
         "roles": ["thumbnail"]
       },
-      "flood-depth": {
-        "title": "Flood Depth Raster",
+      "extent_raster": {
+        "title": "Extent Raster",
+        "description": "GeoTIFF raster file containing flood extent data.",
+        "media_type": "image/tiff; application=geotiff",
+        "roles": ["data"]
+      },
+      "depth_raster": {
+        "title": "Depth Raster",
         "description": "GeoTIFF raster file containing flood depth data.",
         "media_type": "image/tiff; application=geotiff",
         "roles": ["data"]
       },
-      "inundation-extent": {
-        "title": "Inundation Extent Shapefile",
-        "description": "Vector file showing the extent of inundation areas.",
-        "media_type": "application/geo+json",
+      "flow_file": {
+        "title": "Flow File",
+        "description": "CSV file containing flow data.",
+        "media_type": "text/csv",
         "roles": ["data"]
-      },
-      "metadata": {
-        "title": "BLE Item Metadata",
-        "description": "Metadata associated with the BLE item.",
-        "media_type": "application/json",
-        "roles": ["metadata"]
       }
     }
   }
