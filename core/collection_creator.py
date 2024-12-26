@@ -4,7 +4,6 @@ import pystac
 from pystac.extensions.item_assets import ItemAssetsExtension
 import logging
 from pydantic import BaseModel, ValidationError
-
 class CollectionConfig(BaseModel):
     dataset_name: str
     description: str
