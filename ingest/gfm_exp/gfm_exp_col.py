@@ -278,7 +278,7 @@ def process_tile(
         flowfile_object,
         equi7tile_areas,
         flood_ratios,
-        huc8_list=None,
+        huc8_list=huc8_list,
     )
 
     SatExtension.ext(item, add_if_missing=True)
@@ -465,8 +465,6 @@ def main():
         )
         hucs_gdf = gpd.read_file(local_hucs_path)
         for date in dates:
-            if "08" in date:
-                break
             print(f"===============processing {date}===============")
             process_date(
                 date,
