@@ -242,6 +242,8 @@ def process_tile(
     equi7tile_areas = asset_results["equi7tile_areas"]
 
     geometry = asset_results["geometry"]
+    huc8_list = []
+
     if geometry:
         # Check if geometry is within Canada or Mexico before proceeding
         if country_boundaries and is_within_neighbor_countries(
@@ -253,7 +255,6 @@ def process_tile(
             return
 
         # Find intersecting HUC8s if HUCs data is provided
-        huc8_list = []
         if hucs_gdf is not None:
             # Create a GeoDataFrame with the flood geometry
             flood_gdf = gpd.GeoDataFrame(geometry=[shape(geometry)], crs=hucs_gdf.crs)
