@@ -63,11 +63,11 @@ def parse_arguments():
 
 
 def extract_huc_code(identifier):
-    """Extract 8-digit HUC code from identifier using regex."""
-    match = re.search(r"\d{8}", identifier)
+    """Extract 2-12 digit length HUC code from identifier using regex."""
+    match = re.search(r"\b(\d{2}|\d{6}|\d{8}|\d{10}|\d{12})\b", identifier)
     if match:
         return match.group(0)
-    logging.warning(f"No 8-digit HUC code found in identifier: {identifier}")
+    logging.warning(f"No valid HUC code found in identifier: {identifier}")
     return None
 
 
