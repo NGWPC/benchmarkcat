@@ -1,6 +1,10 @@
 import argparse
 import logging
 from datetime import datetime, timezone
+import tempfile
+import os
+import geopandas as gpd
+from shapely.geometry import shape
 import boto3
 import pystac
 from pystac.extensions.projection import ProjectionExtension
@@ -59,16 +63,13 @@ def parse_arguments():
         default="0_10_3",
         help="ripple version",
     )
+    parser.add_argument(
+        "--hucs_object_key",
+        type=str,
+        default="benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg",
+        help="S3 key for the HUC8 boundaries GeoPackage",
+    )
     return parser.parse_args()
-
-
-def extract_huc_code(identifier):
-    """Extract 2-12 digit length HUC code from identifier using regex."""
-    match = re.search(r"(?<![0-9])[0-9]{2,12}(?![0-9])", identifier)
-    if match:
-        return match.group(0)
-    logging.warning(f"No valid HUC code found in identifier: {identifier}")
-    return None
 
 
 def create_ripple_collection(
@@ -129,6 +130,7 @@ def process_source_directory(
     asset_handler,
     f2fim_ver,
     ripple_ver,
+    huc_gdf,
 ):
     subdirs = s3_utils.list_subdirectories(bucket_name, source_path)
 
@@ -136,8 +138,7 @@ def process_source_directory(
         identifier = subdir.strip("/").split("/")[-1]
         logging.info(f"Processing {source} {identifier}")
 
-        huc_code = extract_huc_code(identifier)
-        hucs_list = [huc_code] if huc_code else []
+        hucs_list = []
 
         if asset_handler.assets_processed(subdir) and not reprocess_assets:
             asset_results = asset_handler.read_data_parquet(subdir)
@@ -153,6 +154,31 @@ def process_source_directory(
                 else:
                     extent_areas[mag] = area
             asset_results["extent_areas"] = extent_areas
+
+        # build hucs list using geometry
+        ripple_geom = shape(asset_results["geometry"])
+
+        # Filter out HUC8s that only touch at the boundary
+        candidates = huc_gdf.geometry.intersects(
+            ripple_geom
+        ) & ~huc_gdf.geometry.touches(ripple_geom)
+        sel = huc_gdf[candidates].copy()
+
+        # Compute fractional overlap of each HUC8 polygon
+        sel["overlap"] = sel.geometry.apply(
+            lambda h: h.intersection(ripple_geom).area / h.area
+        )
+
+        # Pick only those that truly contain, are contained by,
+        #    or overlap more than 10% of their own area
+        final = sel[
+            sel.geometry.contains(ripple_geom)
+            | sel.geometry.within(ripple_geom)
+            | (sel["overlap"] > 0.10)
+        ]
+
+        # Extract unique HUC8 codes
+        hucs_list = final["HUC8"].dropna().astype(str).unique().tolist()
 
         # Create STAC item
         item = pystac.Item(
@@ -280,6 +306,14 @@ def main():
     # Process collection-level flowfiles
     flowfile_info = asset_handler.process_collection_flowfiles(args.asset_object_key)
 
+    # Download and read the HUC8 boundaries into a GeoDataFrame
+    with tempfile.TemporaryDirectory() as td:
+        local_hucs = os.path.join(td, os.path.basename(args.hucs_object_key))
+        s3_utils.s3_client.download_file(
+            args.bucket_name, args.hucs_object_key, local_hucs
+        )
+        huc_gdf = gpd.read_file(local_hucs)
+
     # Create collection with flowfile information
     collection = create_ripple_collection(
         s3_utils, args.bucket_name, args.asset_object_key, args.link_type, flowfile_info
@@ -298,6 +332,7 @@ def main():
         asset_handler,
         args.f2fim_ver,
         args.ripple_ver,
+        huc_gdf,
     )
 
     # Process MIP data
@@ -313,6 +348,7 @@ def main():
         asset_handler,
         args.f2fim_ver,
         args.ripple_ver,
+        huc_gdf,
     )
 
     # Update and validate collection
