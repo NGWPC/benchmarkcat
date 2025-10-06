@@ -5,6 +5,7 @@ from shapely.ops import unary_union
 import geopandas as gpd
 import rasterio
 from rasterio.features import shapes
+from rasterio.windows import Window
 import numpy as np
 from typing import Dict, List, Tuple
 import pystac
@@ -55,18 +56,24 @@ class RasterHandler:
     def create_domain_geometry(raster_path: str) -> Tuple[Dict, List[float], Dict]:
         """Create a MultiPolygon geometry from raster data areas and its convex hull"""
         with rasterio.open(raster_path) as src:
-            # Read the raster data
-            data = src.read(1)
-            # Create mask for valid data (not no_data) 
-            valid_data = (data != 255)
-            # Get shapes of valid data areas
-            geoms = list(shapes(valid_data.astype(np.uint8), transform=src.transform))
-            # Convert to shapely geometries and filter for value=1
-            polygons = [shape(geom) for geom, val in geoms if val == 1]
-            
+            # Process raster in windows (out-of-memory processing)
+            polygons = []
+            for ji, window in src.block_windows(1):
+                # Read windowed data
+                data = src.read(1, window=window)
+                # Create mask for valid data (not no_data)
+                valid_data = (data != 255)
+                # Get the transform for this window
+                window_transform = src.window_transform(window)
+                # Get shapes of valid data areas
+                geoms = list(shapes(valid_data.astype(np.uint8), transform=window_transform))
+                # Convert to shapely geometries and filter for value=1
+                window_polygons = [shape(geom) for geom, val in geoms if val == 1]
+                polygons.extend(window_polygons)
+
             if not polygons:
                 raise ValueError(f"No valid geometries found in {raster_path}")
-            
+
             # Create MultiPolygon for model domain
             multi_polygon = MultiPolygon(polygons)
             # Get convex hull for item geometry
@@ -81,7 +88,7 @@ class RasterHandler:
                 bbox = list(convex_hull_4326.bounds)
             else:
                 convex_hull_4326 = multi_polygon.convex_hull
-                bbox = list(convex_hull_4326.bounds)            
+                bbox = list(convex_hull_4326.bounds)
 
         return mapping(convex_hull_4326), bbox, mapping(multi_polygon)
 
@@ -95,12 +102,16 @@ class RasterHandler:
             return wkt2_string
 
     @staticmethod
-    def calculate_extent_area(raster_path: str) -> float:
+    def calculate_extent_area(raster_path: str, resolution: int = 3) -> float:
         """Calculate area of flood extent in square meters"""
         with rasterio.open(raster_path) as src:
-            data = src.read(1)
-            # Count pixels that are not no_data (255) and are 1
-            pixel_count = np.sum((data != 255) & (data == 1))
-            # Convert to area using 3m resolution
-            area = pixel_count * 3 * 3  
+            # Process raster in windows (out-of-memory processing)
+            pixel_count = 0
+            for ji, window in src.block_windows(1):
+                # Read windowed data
+                data = src.read(1, window=window)
+                # Count pixels that are not no_data (255) and are 1
+                pixel_count += np.sum((data != 255) & (data == 1))
+            # Convert to area using specified resolution
+            area = pixel_count * resolution * resolution
             return area
