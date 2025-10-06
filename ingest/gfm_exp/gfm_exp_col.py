@@ -335,7 +335,7 @@ def create_item(
         "description": f"This item lists assets associated with the GFM scene {sent_ti}.",
         "gfm_data_take_start_datetime": start_datetime.isoformat(),
         "gfm_data_take_end_datetime": end_datetime.isoformat(),
-        "proj:epsg": 27705,
+        "proj:code": "EPSG:27705",
         "proj:wkt2": "+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs",
         "gsd (m)": 20,
         "gfm_version": gfm_version,

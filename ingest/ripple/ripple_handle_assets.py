@@ -63,7 +63,7 @@ class RippleFIMAssetHandler:
             return result
         return {}
 
-    def handle_assets(self, item_path: str, source: str) -> Dict[str, Any]:
+    def handle_assets(self, item_path: str, source: str, resolution: int = 3) -> Dict[str, Any]:
         results = {}
         magnitudes = []
         extent_areas = {}
@@ -109,13 +109,13 @@ class RippleFIMAssetHandler:
         for tiff in tiff_files:
             magnitude = os.path.basename(tiff).split('_')[0]
             magnitudes.append(magnitude)
-        
+
             with tempfile.TemporaryDirectory() as tmpdir:
                 local_tiff = os.path.join(tmpdir, os.path.basename(tiff))
                 self.s3_utils.s3_client.download_file(self.bucket_name, tiff, local_tiff)
-            
-                # Calculate extent area only
-                extent_areas[magnitude] = RasterHandler.calculate_extent_area(local_tiff)
+
+                # Calculate extent area with specified resolution
+                extent_areas[magnitude] = RasterHandler.calculate_extent_area(local_tiff, resolution)
             
         results[item_path] = {
             "source": source,
