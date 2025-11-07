@@ -274,6 +274,18 @@ class RasterUtils:
         return pixel_count
 
     @staticmethod
+    def get_max_value(raster_path):
+        """Get the maximum value from a raster file."""
+        try:
+            raster = rioxarray.open_rasterio(raster_path, masked=True, chunks=True)
+            band1 = raster.sel(band=1)
+            max_val = float(band1.max().compute().item())
+            return max_val
+        except Exception as e:
+            logging.error(f"Error getting max value from {raster_path}: {e}")
+            return None
+
+    @staticmethod
     def get_wkt2_string(raster_path):
         with rasterio.open(raster_path) as src:
             crs_info = src.crs.to_wkt()

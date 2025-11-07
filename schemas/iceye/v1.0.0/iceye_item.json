@@ -1,0 +1,471 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "~/benchmarkcat/schemas/iceye/v1.0.0/iceye_item.json#",
+  "title": "ICEYE STAC Item",
+  "type": "object",
+  "description": "This object represents the metadata for an ICEYE flood detection item in a SpatioTemporal Asset Catalog.",
+  "allOf": [
+    {
+      "$ref": "#/definitions/core"
+    }
+  ],
+  "definitions": {
+    "common_metadata": {
+      "allOf": [
+        {
+          "$ref": "../../common_item_metadata/basics.json"
+        },
+        {
+          "$ref": "../../common_item_metadata/datetime.json"
+        },
+        {
+          "$ref": "../../common_item_metadata/licensing.json"
+        },
+        {
+          "$ref": "../../common_item_metadata/provider.json"
+        }
+      ]
+    },
+    "core": {
+      "allOf": [
+        {
+          "$ref": "https://geojson.org/schema/Feature.json"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "geometry",
+                "bbox"
+              ],
+              "properties": {
+                "geometry": {
+                  "$ref": "https://geojson.org/schema/Geometry.json"
+                },
+                "bbox": {
+                  "type": "array",
+                  "oneOf": [
+                    {
+                      "minItems": 4,
+                      "maxItems": 4
+                    },
+                    {
+                      "minItems": 6,
+                      "maxItems": 6
+                    }
+                  ],
+                  "items": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "geometry"
+              ],
+              "properties": {
+                "geometry": {
+                  "type": "null"
+                },
+                "bbox": {
+                  "not": {}
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "stac_version",
+            "id",
+            "links",
+            "assets",
+            "properties"
+          ],
+          "properties": {
+            "stac_version": {
+              "title": "STAC version",
+              "type": "string",
+              "const": "1.0.0"
+            },
+            "stac_extensions": {
+              "title": "STAC extensions",
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "title": "Reference to a JSON Schema",
+                "type": "string",
+                "format": "iri"
+              },
+              "default": [
+                "https://stac-extensions.github.io/projection/v1.0.0/schema.json"
+              ]
+            },
+            "id": {
+              "title": "Provider ID",
+              "description": "ICEYE event identifier",
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^ICEYE_FSD-[0-9]+.*"
+            },
+            "links": {
+              "title": "Item links",
+              "description": "Links to item relations",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/link"
+              }
+            },
+            "assets": {
+              "$ref": "#/definitions/assets"
+            },
+            "properties": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/common_metadata"
+                },
+                {
+                  "$ref": "#/definitions/iceye_properties"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "datetime"
+                      ],
+                      "properties": {
+                        "datetime": {
+                          "not": {
+                            "type": "null"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "required": [
+                        "datetime",
+                        "start_datetime",
+                        "end_datetime"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "iceye_properties": {
+      "type": "object",
+      "properties": {
+        "iceye:event_id": {
+          "title": "Event ID",
+          "description": "ICEYE FSD identifier (e.g., FSD-1279)",
+          "type": "string",
+          "pattern": "^FSD-[0-9]+$"
+        },
+        "iceye:release_number": {
+          "title": "Release Number",
+          "description": "Release number (e.g., R6)",
+          "type": "string",
+          "pattern": "^R[0-9]+$"
+        },
+        "iceye:event_type": {
+          "title": "Event Type",
+          "description": "Type of flood event",
+          "type": "string",
+          "enum": [
+            "Storm Surge",
+            "river",
+            "flash",
+            "coastal",
+            "urban"
+          ]
+        },
+        "iceye:country": {
+          "title": "Country",
+          "description": "Country where flood occurred",
+          "type": "string"
+        },
+        "iceye:country_iso": {
+          "title": "Country ISO Code",
+          "description": "ISO country code",
+          "type": "string"
+        },
+        "iceye:flooded_area_km2": {
+          "title": "Flooded Area",
+          "description": "Total flooded area in square kilometers",
+          "type": "number",
+          "minimum": 0
+        },
+        "iceye:product_version": {
+          "title": "Product Version",
+          "description": "ICEYE product version",
+          "type": "string"
+        },
+        "iceye:analysis_tier": {
+          "title": "Analysis Tier",
+          "description": "Analysis tier level",
+          "type": "integer",
+          "minimum": 1
+        },
+        "iceye:depth_unit": {
+          "title": "Depth Unit (Standardized)",
+          "description": "Standardized depth unit, always inches",
+          "type": "string",
+          "const": "inches"
+        },
+        "iceye:depth_unit_original": {
+          "title": "Original Depth Unit",
+          "description": "Original depth unit from source data",
+          "type": "string",
+          "enum": [
+            "feet",
+            "inches",
+            "unknown"
+          ]
+        },
+        "iceye:depth_conversion_factor": {
+          "title": "Depth Conversion Factor",
+          "description": "Conversion factor applied to standardize to inches (12.0 if converted from feet)",
+          "type": "number",
+          "enum": [
+            1.0,
+            12.0
+          ]
+        },
+        "iceye:depth_conversion_note": {
+          "title": "Depth Conversion Note",
+          "description": "Human-readable explanation of depth unit conversion",
+          "type": "string"
+        },
+        "iceye:pixel_size": {
+          "title": "Pixel Size",
+          "description": "Pixel size value",
+          "type": "number",
+          "minimum": 0
+        },
+        "iceye:pixel_size_unit": {
+          "title": "Pixel Size Unit",
+          "description": "Unit for pixel size",
+          "type": "string"
+        },
+        "proj:epsg": {
+          "title": "EPSG Code",
+          "description": "EPSG code of the data",
+          "type": "integer"
+        },
+        "proj:wkt2": {
+          "title": "WKT2 Projection",
+          "description": "WKT2 projection string",
+          "type": "string"
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": [
+        "rel",
+        "href"
+      ],
+      "properties": {
+        "href": {
+          "title": "Link reference",
+          "type": "string",
+          "format": "iri-reference",
+          "minLength": 1
+        },
+        "rel": {
+          "title": "Link relation type",
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "title": "Link type",
+          "type": "string"
+        },
+        "title": {
+          "title": "Link title",
+          "type": "string"
+        }
+      }
+    },
+    "assets": {
+      "title": "Asset links",
+      "description": "Links to assets",
+      "type": "object",
+      "properties": {
+        "thumbnail": {
+          "$ref": "#/definitions/asset_thumbnail"
+        },
+        "flood_extent_gpkg": {
+          "$ref": "#/definitions/asset_vector"
+        },
+        "flood_extent_geojson": {
+          "$ref": "#/definitions/asset_vector"
+        },
+        "flood_depth_raster": {
+          "$ref": "#/definitions/asset_raster"
+        },
+        "building_statistics_gpkg": {
+          "$ref": "#/definitions/asset_vector"
+        },
+        "building_statistics_geojson": {
+          "$ref": "#/definitions/asset_vector"
+        },
+        "flood_metadata": {
+          "$ref": "#/definitions/asset_metadata"
+        },
+        "release_notes": {
+          "$ref": "#/definitions/asset_pdf"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/asset"
+      }
+    },
+    "asset": {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "href"
+          ],
+          "properties": {
+            "href": {
+              "title": "Asset reference",
+              "type": "string",
+              "format": "iri-reference",
+              "minLength": 1
+            },
+            "title": {
+              "title": "Asset title",
+              "type": "string"
+            },
+            "description": {
+              "title": "Asset description",
+              "type": "string"
+            },
+            "type": {
+              "title": "Asset media type",
+              "type": "string"
+            },
+            "roles": {
+              "title": "Asset roles",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "$ref": "#/definitions/common_metadata"
+        }
+      ]
+    },
+    "asset_thumbnail": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/asset"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "image/png"
+            },
+            "roles": {
+              "contains": {
+                "const": "thumbnail"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "asset_raster": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/asset"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "image/tiff; application=geotiff"
+            },
+            "roles": {
+              "contains": {
+                "const": "data"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "asset_vector": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/asset"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "application/geopackage+sqlite3",
+                "application/geo+json"
+              ]
+            },
+            "roles": {
+              "contains": {
+                "const": "data"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "asset_metadata": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/asset"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "application/json"
+            },
+            "roles": {
+              "contains": {
+                "const": "metadata"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "asset_pdf": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/asset"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "application/pdf"
+            },
+            "roles": {
+              "contains": {
+                "const": "metadata"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
