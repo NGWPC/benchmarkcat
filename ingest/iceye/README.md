@@ -102,7 +102,7 @@ Each STAC item includes the following properties:
 - `iceye:depth_conversion_note`: Explanation of conversion (if applied)
 - `iceye:pixel_size`: Pixel size value
 - `iceye:pixel_size_unit`: Unit for pixel size (e.g., "degree")
-- `proj:epsg`: EPSG code of the data
+- `proj:code`: EPSG code of the data (e.g., "EPSG:4326")
 - `proj:wkt2`: WKT2 projection string
 - `start_datetime`: Flood event start time
 - `end_datetime`: Flood event end time

@@ -208,8 +208,8 @@ def create_item(event_path, event_id, asset_results, s3_utils, bucket_name, link
         properties["iceye:product_version"] = event_info['product_version']
     if event_info.get('analysis_tier'):
         properties["iceye:analysis_tier"] = event_info['analysis_tier']
-    if event_info.get('epsg'):
-        properties["proj:epsg"] = event_info['epsg']
+    if event_info.get('code'):
+        properties["proj:code"] = event_info['epsg']
     if event_info.get('pixel_size'):
         properties["iceye:pixel_size"] = event_info['pixel_size']
     if event_info.get('pixel_size_unit'):

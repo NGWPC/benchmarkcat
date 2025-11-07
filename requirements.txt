@@ -10,7 +10,6 @@ asciitree
 async-retriever
 async-timeout
 attrs
--e file:///home/dylan.lee/benchmarkcat
 boto3
 botocore
 branca

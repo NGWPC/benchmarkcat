@@ -255,7 +255,7 @@
           "description": "Unit for pixel size",
           "type": "string"
         },
-        "proj:epsg": {
+        "proj:code": {
           "title": "EPSG Code",
           "description": "EPSG code of the data",
           "type": "integer"

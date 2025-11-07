@@ -5,12 +5,10 @@ import logging
 import tempfile
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import shape, mapping
-from shapely.ops import unary_union
+from shapely.geometry import shape, mapping, MultiPoint
 from typing import Dict, Any, List
 from ingest.iceye.iceye_stac import ICEYEInfo, AssetUtils
 from ingest.bench import S3Utils, RasterUtils
-
 
 class ICEYEAssetHandler:
     def __init__(self, s3_utils, bucket_name, derived_metadata_path) -> None:
@@ -80,34 +78,57 @@ class ICEYEAssetHandler:
 
     def handle_assets(self, event_path) -> Dict[str, Any]:
         """Process all assets for a given ICEYE event"""
+        import time
         results = {}
         event_id = event_path.strip('/').split('/')[-1]
-        logging.info(f"Processing assets for event: {event_id}")
+        logging.info(f"[{event_id}] Starting asset processing")
+        start_time = time.time()
 
         # Get all files for this event
+        logging.info(f"[{event_id}] Step 1/7: Listing files from S3...")
+        step_start = time.time()
         all_files = self.s3_utils.list_files_with_extensions(
             self.bucket_name,
             event_path,
             ['.tif', '.gpkg', '.geojson', '.json', '.pdf']
         )
+        logging.info(f"[{event_id}] Found {len(all_files)} files ({time.time() - step_start:.2f}s)")
 
         # Parse metadata from JSON file
+        logging.info(f"[{event_id}] Step 2/7: Extracting metadata from JSON...")
+        step_start = time.time()
         metadata = self.extract_metadata(all_files)
+        logging.info(f"[{event_id}] Metadata extracted ({time.time() - step_start:.2f}s)")
 
         # Extract geometry and bbox from extent file (convex hull)
+        logging.info(f"[{event_id}] Step 3/7: Extracting geometry and computing convex hull...")
+        step_start = time.time()
         geometry, bbox, wkt2_string = self.extract_geometry(all_files)
+        logging.info(f"[{event_id}] Geometry extracted ({time.time() - step_start:.2f}s)")
 
         # Calculate flooded area
+        logging.info(f"[{event_id}] Step 4/7: Calculating flooded area...")
+        step_start = time.time()
         flooded_area = self.calculate_flooded_area(all_files, metadata)
+        logging.info(f"[{event_id}] Flooded area: {flooded_area} km² ({time.time() - step_start:.2f}s)")
 
         # Organize asset paths by type
+        logging.info(f"[{event_id}] Step 5/7: Organizing asset paths...")
+        step_start = time.time()
         asset_paths = self.organize_asset_paths(all_files)
+        logging.info(f"[{event_id}] Assets organized ({time.time() - step_start:.2f}s)")
 
         # Create thumbnail from extent file
+        logging.info(f"[{event_id}] Step 6/7: Creating thumbnail from extent file...")
+        step_start = time.time()
         thumbnail = self.create_and_add_thumbnail(all_files)
+        logging.info(f"[{event_id}] Thumbnail created ({time.time() - step_start:.2f}s)")
 
         # Detect and standardize depth unit (convert feet to inches)
+        logging.info(f"[{event_id}] Step 7/7: Standardizing depth units...")
+        step_start = time.time()
         depth_unit_info = self.standardize_depth_unit(all_files, metadata)
+        logging.info(f"[{event_id}] Depth units standardized ({time.time() - step_start:.2f}s)")
 
         results[event_path] = {
             "geometry": geometry,
@@ -120,7 +141,11 @@ class ICEYEAssetHandler:
             "depth_unit_info": depth_unit_info,
         }
 
+        logging.info(f"[{event_id}] Writing results to parquet...")
         self.write_data_parquet(results)
+
+        total_time = time.time() - start_time
+        logging.info(f"[{event_id}] ✓ Asset processing complete (total: {total_time:.2f}s)")
         return results[event_path]
 
     def extract_metadata(self, all_files: List[str]) -> Dict[str, Any]:
@@ -153,54 +178,92 @@ class ICEYEAssetHandler:
         Extract geometry from extent file and return convex hull.
         Returns (geometry_dict, bbox, wkt2_string)
         """
-        # Look for extent files (gpkg or geojson)
+        # Find extent files (prefer .gpkg over .geojson)
         extent_files = [
             f for f in all_files
             if ('extent' in f.lower() or 'floodextent' in f.lower())
-            and (f.endswith('.gpkg') or f.endswith('.geojson'))
+            and f.endswith(('.gpkg', '.geojson'))
         ]
 
         if not extent_files:
             logging.warning("No extent file found")
             return None, None, None
 
-        extent_file = extent_files[0]  # Use first extent file (prefer gpkg if available)
-        if len([f for f in extent_files if f.endswith('.gpkg')]) > 0:
-            extent_file = [f for f in extent_files if f.endswith('.gpkg')][0]
+        # Prefer .gpkg files
+        extent_file = next((f for f in extent_files if f.endswith('.gpkg')), extent_files[0])
 
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
+                # Download extent file
                 local_path = os.path.join(tmpdir, os.path.basename(extent_file))
-                self.s3_utils.s3_client.download_file(
-                    self.bucket_name, extent_file, local_path
-                )
+                logging.info(f"Downloading extent file: {os.path.basename(extent_file)}")
+                self.s3_utils.s3_client.download_file(self.bucket_name, extent_file, local_path)
 
-                # Read the extent file
+                # Read and reproject to WGS84
                 gdf = gpd.read_file(local_path)
+                logging.info(f"Read {len(gdf)} features from extent file")
 
-                # Get WKT2 string from the file
                 wkt2_string = gdf.crs.to_wkt() if gdf.crs else None
 
-                # Transform to WGS84 for STAC
                 if gdf.crs and gdf.crs.to_epsg() != 4326:
+                    logging.info(f"Reprojecting from EPSG:{gdf.crs.to_epsg()} to EPSG:4326")
                     gdf = gdf.to_crs(epsg=4326)
 
-                # Union all geometries and get convex hull
-                if len(gdf) > 0:
-                    unioned_geom = unary_union(gdf.geometry)
-                    convex_hull = unioned_geom.convex_hull
-
-                    geometry_dict = mapping(convex_hull)
-                    bbox = list(convex_hull.bounds)
-
-                    return geometry_dict, bbox, wkt2_string
-                else:
+                if len(gdf) == 0:
                     logging.warning(f"No geometries found in extent file {extent_file}")
                     return None, None, None
+
+                # Compute convex hull from all coordinates
+                logging.info(f"Processing {len(gdf)} feature(s) for convex hull")
+
+                # Simplify if dataset is large
+                geometries = gdf.geometry
+                if len(geometries) > 1000:
+                    logging.info(f"Simplifying {len(geometries)} geometries")
+                    geometries = geometries.simplify(tolerance=0.001, preserve_topology=False)
+
+                # Extract all coordinates
+                all_coords = []
+                for geom in geometries:
+                    coords = self._extract_coords_from_geometry(geom)
+                    all_coords.extend(coords)
+
+                logging.info(f"Extracted {len(all_coords)} coordinate points")
+
+                # Sample if too many points
+                if len(all_coords) > 10000:
+                    import random
+                    all_coords = random.sample(all_coords, 10000)
+                    logging.info(f"Sampled down to {len(all_coords)} points")
+
+                # Compute convex hull
+                convex_hull = MultiPoint(all_coords).convex_hull
+                logging.info("Convex hull computed")
+
+                geometry_dict = mapping(convex_hull)
+                bbox = list(convex_hull.bounds)
+
+                return geometry_dict, bbox, wkt2_string
 
         except Exception as e:
             logging.error(f"Error extracting geometry from {extent_file}: {e}")
             return None, None, None
+
+    def _extract_coords_from_geometry(self, geom) -> list:
+        """Helper method to extract coordinates from any geometry type."""
+        coords = []
+
+        if geom.geom_type == 'Polygon':
+            coords.extend(geom.exterior.coords)
+        elif geom.geom_type == 'MultiPolygon':
+            for poly in geom.geoms:
+                coords.extend(poly.exterior.coords)
+        elif geom.geom_type == 'Point':
+            coords.append(geom.coords[0])
+        elif geom.geom_type == 'MultiPoint':
+            coords.extend([pt.coords[0] for pt in geom.geoms])
+
+        return coords
 
     def calculate_flooded_area(self, all_files: List[str], metadata: Dict) -> float:
         """
@@ -299,7 +362,7 @@ class ICEYEAssetHandler:
     def create_and_add_thumbnail(self, all_files: List[str]) -> str:
         """
         Create thumbnail from the first available extent file.
-        Similar to AHPS implementation.
+        Uses matplotlib to render vector extent files as PNG thumbnails.
         """
         # Find extent files (prefer GPKG, then GeoJSON)
         extent_files = [
@@ -318,19 +381,65 @@ class ICEYEAssetHandler:
             extent_file = [f for f in extent_files if f.endswith('.gpkg')][0]
 
         try:
+            logging.debug(f"Importing matplotlib...")
+            import matplotlib
+            matplotlib.use('Agg')  # Use non-interactive backend
+            import matplotlib.pyplot as plt
+            logging.debug("Matplotlib imported")
+
             with tempfile.TemporaryDirectory() as tmpdir:
                 local_extent_path = os.path.join(tmpdir, os.path.basename(extent_file))
                 local_thumbnail_path = os.path.join(tmpdir, 'thumbnail.png')
 
+                # Download the extent file
+                logging.info(f"Downloading extent file for thumbnail: {os.path.basename(extent_file)}")
                 self.s3_utils.s3_client.download_file(
                     self.bucket_name, extent_file, local_extent_path
                 )
+                logging.info("Extent file downloaded")
 
-                thumbnail_s3_path = self.s3_utils.make_and_upload_thumbnail(
-                    local_extent_path, local_thumbnail_path, self.bucket_name, extent_file
+                # Read the vector file
+                logging.info("Reading extent file with geopandas...")
+                gdf = gpd.read_file(local_extent_path)
+                logging.info(f"Read {len(gdf)} features")
+
+                if len(gdf) == 0:
+                    logging.warning(f"No geometries in {extent_file} for thumbnail")
+                    return None
+
+                # Simplify for faster plotting if many features
+                if len(gdf) > 1000:
+                    logging.info(f"Large dataset ({len(gdf)} features), simplifying for thumbnail...")
+                    gdf['geometry'] = gdf.geometry.simplify(tolerance=0.001, preserve_topology=False)
+
+                # Create the thumbnail plot
+                logging.info("Creating matplotlib plot...")
+                fig, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=100)
+                gdf.plot(ax=ax, color='blue', alpha=0.6, edgecolor='darkblue', linewidth=0.5)
+                logging.info("Plot created")
+
+                # Remove axes and borders for cleaner thumbnail
+                ax.set_axis_off()
+                ax.set_aspect('equal')
+
+                # Save the thumbnail
+                logging.info(f"Saving thumbnail to {local_thumbnail_path}...")
+                plt.tight_layout(pad=0)
+                plt.savefig(local_thumbnail_path, bbox_inches='tight', pad_inches=0, dpi=100)
+                plt.close(fig)
+                logging.info("Thumbnail saved")
+
+                # Upload thumbnail to S3
+                s3_dir = os.path.dirname(extent_file)
+                thumbnail_filename = 'thumbnail.png'
+                thumbnail_s3_path = os.path.join(s3_dir, thumbnail_filename)
+
+                logging.info(f"Uploading thumbnail to S3: {thumbnail_s3_path}")
+                self.s3_utils.s3_client.upload_file(
+                    local_thumbnail_path, self.bucket_name, thumbnail_s3_path
                 )
 
-                logging.info(f"Created thumbnail at {thumbnail_s3_path}")
+                logging.info(f"Created and uploaded thumbnail to s3://{self.bucket_name}/{thumbnail_s3_path}")
                 return thumbnail_s3_path
 
         except Exception as e:
