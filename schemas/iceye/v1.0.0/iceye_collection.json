@@ -188,6 +188,7 @@
           "properties": {
             "thumbnail": {
               "title": "Thumbnail",
+              "description": "Primary thumbnail image (single-region events)",
               "type": "object",
               "properties": {
                 "type": {
@@ -278,6 +279,24 @@
                   "type": "array",
                   "contains": {
                     "const": "metadata"
+                  }
+                }
+              }
+            }
+          },
+          "patternProperties": {
+            "^thumbnail_": {
+              "title": "Regional Thumbnail",
+              "description": "Thumbnail image for a specific region (multi-region events)",
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "image/png"
+                },
+                "roles": {
+                  "type": "array",
+                  "contains": {
+                    "const": "thumbnail"
                   }
                 }
               }

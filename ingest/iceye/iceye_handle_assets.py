@@ -47,7 +47,7 @@ class ICEYEAssetHandler:
                 'asset_paths': pd.Series(dtype='str'),
                 'flooded_area': pd.Series(dtype='float'),
                 'wkt2_string': pd.Series(dtype='str'),
-                'thumbnail': pd.Series(dtype='str'),
+                'thumbnails': pd.Series(dtype='str'),  # JSON list of thumbnail paths
                 'depth_unit_info': pd.Series(dtype='str'),
             }
             return pd.DataFrame(columns)
@@ -69,8 +69,11 @@ class ICEYEAssetHandler:
                 result['asset_paths'] = json.loads(result['asset_paths'])
             if result.get('wkt2_string'):
                 result['wkt2_string'] = result['wkt2_string']
-            if result.get('thumbnail'):
-                result['thumbnail'] = result['thumbnail']
+            if result.get('thumbnails'):
+                result['thumbnails'] = json.loads(result['thumbnails'])
+            # Backward compatibility: support old 'thumbnail' field
+            elif result.get('thumbnail'):
+                result['thumbnails'] = [result['thumbnail']]
             if result.get('depth_unit_info'):
                 result['depth_unit_info'] = json.loads(result['depth_unit_info'])
             return result
@@ -118,11 +121,11 @@ class ICEYEAssetHandler:
         asset_paths = self.organize_asset_paths(all_files)
         logging.info(f"[{event_id}] Assets organized ({time.time() - step_start:.2f}s)")
 
-        # Create thumbnail from extent file
-        logging.info(f"[{event_id}] Step 6/7: Creating thumbnail from extent file...")
+        # Create thumbnails from depth files (may be multiple for multi-region events)
+        logging.info(f"[{event_id}] Step 6/7: Creating thumbnails from depth files...")
         step_start = time.time()
-        thumbnail = self.create_and_add_thumbnail(all_files)
-        logging.info(f"[{event_id}] Thumbnail created ({time.time() - step_start:.2f}s)")
+        thumbnails = self.create_and_add_thumbnails(all_files)
+        logging.info(f"[{event_id}] Created {len(thumbnails) if thumbnails else 0} thumbnail(s) ({time.time() - step_start:.2f}s)")
 
         # Detect and standardize depth unit (convert feet to inches)
         logging.info(f"[{event_id}] Step 7/7: Standardizing depth units...")
@@ -137,7 +140,7 @@ class ICEYEAssetHandler:
             "asset_paths": asset_paths,
             "flooded_area": flooded_area,
             "wkt2_string": wkt2_string,
-            "thumbnail": thumbnail,
+            "thumbnails": thumbnails,
             "depth_unit_info": depth_unit_info,
         }
 
@@ -359,92 +362,77 @@ class ICEYEAssetHandler:
         logging.info("ICEYE data does not contain NWM flowfile data (SAR observation only)")
         return None, None
 
-    def create_and_add_thumbnail(self, all_files: List[str]) -> str:
+    def create_and_add_thumbnails(self, all_files: List[str]) -> List[str]:
         """
-        Create thumbnail from the first available extent file.
-        Uses matplotlib to render vector extent files as PNG thumbnails.
+        Create thumbnails from all available depth raster files.
+        Supports multi-region events (e.g., Helene with north/central/south regions).
+        Uses RasterUtils.create_preview() for consistent thumbnail generation.
+
+        Returns:
+            List of S3 paths to generated thumbnails
         """
-        # Find extent files (prefer GPKG, then GeoJSON)
-        extent_files = [
+        # Find depth raster files
+        depth_files = [
             f for f in all_files
-            if ('extent' in f.lower() or 'floodextent' in f.lower())
-            and (f.endswith('.gpkg') or f.endswith('.geojson'))
+            if ('depth' in f.lower() or 'flooddepth' in f.lower())
+            and f.endswith('.tif')
         ]
 
-        if not extent_files:
-            logging.warning("No extent file found for thumbnail generation")
-            return None
+        if not depth_files:
+            logging.warning("No depth raster files found for thumbnail generation")
+            return []
 
-        # Prefer GPKG if available
-        extent_file = extent_files[0]
-        if any(f.endswith('.gpkg') for f in extent_files):
-            extent_file = [f for f in extent_files if f.endswith('.gpkg')][0]
+        logging.info(f"Found {len(depth_files)} depth file(s) for thumbnail generation")
 
-        try:
-            logging.debug(f"Importing matplotlib...")
-            import matplotlib
-            matplotlib.use('Agg')  # Use non-interactive backend
-            import matplotlib.pyplot as plt
-            logging.debug("Matplotlib imported")
+        thumbnail_paths = []
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                local_extent_path = os.path.join(tmpdir, os.path.basename(extent_file))
-                local_thumbnail_path = os.path.join(tmpdir, 'thumbnail.png')
+        for idx, depth_file in enumerate(depth_files, 1):
+            try:
+                # Extract region name from filename if available (e.g., "north", "central", "south")
+                file_basename = os.path.basename(depth_file)
+                logging.info(f"Processing thumbnail {idx}/{len(depth_files)}: {file_basename}")
 
-                # Download the extent file
-                logging.info(f"Downloading extent file for thumbnail: {os.path.basename(extent_file)}")
-                self.s3_utils.s3_client.download_file(
-                    self.bucket_name, extent_file, local_extent_path
-                )
-                logging.info("Extent file downloaded")
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    local_depth_path = os.path.join(tmpdir, os.path.basename(depth_file))
 
-                # Read the vector file
-                logging.info("Reading extent file with geopandas...")
-                gdf = gpd.read_file(local_extent_path)
-                logging.info(f"Read {len(gdf)} features")
+                    # Generate thumbnail filename based on depth file name
+                    # e.g., "thumbnail_north.png", "thumbnail_central.png", "thumbnail_south.png"
+                    depth_name = os.path.splitext(file_basename)[0]
 
-                if len(gdf) == 0:
-                    logging.warning(f"No geometries in {extent_file} for thumbnail")
-                    return None
+                    # Extract region identifier if present
+                    region_suffix = ""
+                    for region in ["north", "south", "east", "west", "central", "northeast", "northwest", "southeast", "southwest"]:
+                        if region in depth_name.lower():
+                            region_suffix = f"_{region}"
+                            break
 
-                # Simplify for faster plotting if many features
-                if len(gdf) > 1000:
-                    logging.info(f"Large dataset ({len(gdf)} features), simplifying for thumbnail...")
-                    gdf['geometry'] = gdf.geometry.simplify(tolerance=0.001, preserve_topology=False)
+                    # If no region found but multiple files, use index
+                    if not region_suffix and len(depth_files) > 1:
+                        region_suffix = f"_{idx}"
 
-                # Create the thumbnail plot
-                logging.info("Creating matplotlib plot...")
-                fig, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=100)
-                gdf.plot(ax=ax, color='blue', alpha=0.6, edgecolor='darkblue', linewidth=0.5)
-                logging.info("Plot created")
+                    thumbnail_filename = f"thumbnail{region_suffix}.png"
+                    local_thumbnail_path = os.path.join(tmpdir, thumbnail_filename)
 
-                # Remove axes and borders for cleaner thumbnail
-                ax.set_axis_off()
-                ax.set_aspect('equal')
+                    # Use the standardized make_and_upload_thumbnail method from bench.py
+                    logging.info(f"Generating thumbnail from {file_basename}")
+                    thumbnail_s3_path = self.s3_utils.make_and_upload_thumbnail(
+                        local_depth_path, local_thumbnail_path, self.bucket_name, depth_file
+                    )
 
-                # Save the thumbnail
-                logging.info(f"Saving thumbnail to {local_thumbnail_path}...")
-                plt.tight_layout(pad=0)
-                plt.savefig(local_thumbnail_path, bbox_inches='tight', pad_inches=0, dpi=100)
-                plt.close(fig)
-                logging.info("Thumbnail saved")
+                    logging.info(f"✓ Thumbnail {idx}/{len(depth_files)} uploaded: {thumbnail_filename}")
+                    thumbnail_paths.append(thumbnail_s3_path)
 
-                # Upload thumbnail to S3
-                s3_dir = os.path.dirname(extent_file)
-                thumbnail_filename = 'thumbnail.png'
-                thumbnail_s3_path = os.path.join(s3_dir, thumbnail_filename)
+            except Exception as e:
+                logging.error(f"Error creating thumbnail from {depth_file}: {e}")
+                # Continue processing other thumbnails even if one fails
+                continue
 
-                logging.info(f"Uploading thumbnail to S3: {thumbnail_s3_path}")
-                self.s3_utils.s3_client.upload_file(
-                    local_thumbnail_path, self.bucket_name, thumbnail_s3_path
-                )
+        if thumbnail_paths:
+            logging.info(f"Successfully created {len(thumbnail_paths)}/{len(depth_files)} thumbnail(s)")
+        else:
+            logging.warning("Failed to create any thumbnails")
 
-                logging.info(f"Created and uploaded thumbnail to s3://{self.bucket_name}/{thumbnail_s3_path}")
-                return thumbnail_s3_path
-
-        except Exception as e:
-            logging.error(f"Error creating thumbnail from {extent_file}: {e}")
-            return None
+        return thumbnail_paths
 
     def standardize_depth_unit(self, all_files: List[str], metadata: Dict) -> Dict[str, Any]:
         """
@@ -560,8 +548,8 @@ class ICEYEAssetHandler:
                 data['asset_paths'] = json.dumps(data['asset_paths'])
             if 'wkt2_string' in data and isinstance(data['wkt2_string'], str):
                 data['wkt2_string'] = data['wkt2_string']
-            if 'thumbnail' in data and isinstance(data['thumbnail'], str):
-                data['thumbnail'] = data['thumbnail']
+            if 'thumbnails' in data and isinstance(data['thumbnails'], list):
+                data['thumbnails'] = json.dumps(data['thumbnails'])
             if 'depth_unit_info' in data and isinstance(data['depth_unit_info'], dict):
                 data['depth_unit_info'] = json.dumps(data['depth_unit_info'])
 

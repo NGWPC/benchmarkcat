@@ -28,12 +28,29 @@ The collection schema defines the structure for ICEYE flood detection collection
 
 The collection defines these item asset types:
 
-1. **thumbnail**: PNG thumbnail image
-2. **flood_extent**: Vector flood extent (GPKG or GeoJSON)
-3. **flood_depth**: Raster flood depth (GeoTIFF)
-4. **building_statistics**: Vector building statistics (GPKG or GeoJSON)
-5. **flood_metadata**: JSON metadata file
-6. **release_notes**: PDF release notes (optional)
+1. **thumbnail**: PNG thumbnail image (primary/single-region events)
+2. **thumbnail_\***: PNG thumbnail images for specific regions (multi-region events)
+   - Pattern: Assets with keys matching `^thumbnail_` (e.g., `thumbnail_north`, `thumbnail_central`, `thumbnail_south`)
+   - Used for events covering multiple geographic regions (e.g., Helene with north/central/south regions)
+3. **flood_extent**: Vector flood extent (GPKG or GeoJSON)
+4. **flood_depth**: Raster flood depth (GeoTIFF)
+5. **building_statistics**: Vector building statistics (GPKG or GeoJSON)
+6. **flood_metadata**: JSON metadata file
+7. **release_notes**: PDF release notes (optional)
+
+## Multi-Region Event Support
+
+ICEYE events may cover multiple geographic regions, each with its own depth raster and thumbnail. The schema supports this through flexible asset naming patterns:
+
+**Single-Region Events** (e.g., Hurricane Ian):
+- One depth file: `depth.tif`
+- One thumbnail: `thumbnail` asset
+
+**Multi-Region Events** (e.g., Hurricane Helene):
+- Multiple depth files: `depth_north.tif`, `depth_central.tif`, `depth_south.tif`
+- Multiple thumbnails: `thumbnail_north`, `thumbnail_central`, `thumbnail_south` assets
+
+The schema uses `patternProperties` with the pattern `^thumbnail_` to validate any thumbnail asset key that starts with "thumbnail_", providing flexibility for various regional naming schemes.
 
 ## Item Schema
 
@@ -43,6 +60,7 @@ The item schema defines the structure for individual ICEYE flood event items, in
 - Event-specific properties with `iceye:` prefix
 - Projection extension properties
 - Asset definitions for all file types
+- Flexible thumbnail asset naming for single and multi-region events
 
 ### Key Requirements
 
@@ -87,10 +105,23 @@ All depth measurements are standardized to inches:
 
 ## Asset Types
 
-### Thumbnail
+### Thumbnail (Primary)
+- **Asset Key**: `thumbnail`
 - **Media Type**: `image/png`
 - **Role**: `thumbnail`
-- **Description**: Visual preview of flood extent
+- **Description**: Visual preview of flood extent for single-region events
+- **Usage**: Used when the event has a single depth file covering the entire area
+
+### Thumbnails (Regional)
+- **Asset Keys**: `thumbnail_north`, `thumbnail_central`, `thumbnail_south`, etc.
+- **Pattern**: Any key matching `^thumbnail_`
+- **Media Type**: `image/png`
+- **Role**: `thumbnail`
+- **Description**: Visual previews for multi-region events
+- **Usage**: Used when the event has multiple depth files covering different geographic regions
+- **Examples**:
+  - Hurricane Helene (FSD-2227): Has 3 regional thumbnails for north, central, and south regions
+  - Each thumbnail corresponds to a specific depth raster file for that region
 
 ### Flood Extent
 - **Media Types**: `application/geopackage+sqlite3` or `application/geo+json`
@@ -160,7 +191,9 @@ stac validate --schema schemas/iceye/v1.0.0/iceye_item.json item.json
 }
 ```
 
-### Item Example
+### Item Example (Single-Region Event)
+
+Hurricane Ian with single depth file:
 
 ```json
 {
@@ -189,12 +222,78 @@ stac validate --schema schemas/iceye/v1.0.0/iceye_item.json item.json
     "thumbnail": {
       "href": "s3://bucket/thumbnail.png",
       "type": "image/png",
-      "roles": ["thumbnail"]
+      "roles": ["thumbnail"],
+      "title": "Thumbnail Image"
     },
     "flood_depth_raster": {
       "href": "s3://bucket/depth.tif",
       "type": "image/tiff; application=geotiff",
       "roles": ["data"]
+    }
+  }
+}
+```
+
+### Item Example (Multi-Region Event)
+
+Hurricane Helene with three regional depth files:
+
+```json
+{
+  "stac_version": "1.0.0",
+  "type": "Feature",
+  "id": "ICEYE_FSD-2227_flood_depth_usa_helene_in_R3",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [[...]]
+  },
+  "bbox": [-84.5, 32.0, -80.0, 36.5],
+  "properties": {
+    "datetime": "2024-10-05T13:00:00Z",
+    "iceye:event_id": "FSD-2227",
+    "iceye:release_number": "R3",
+    "iceye:event_type": "Storm Surge",
+    "iceye:country": "USA",
+    "iceye:flooded_area_km2": 12500.0,
+    "iceye:depth_unit": "inches",
+    "proj:epsg": 4326
+  },
+  "assets": {
+    "thumbnail_north": {
+      "href": "s3://bucket/thumbnail_north.png",
+      "type": "image/png",
+      "roles": ["thumbnail"],
+      "title": "Thumbnail Image (North)"
+    },
+    "thumbnail_central": {
+      "href": "s3://bucket/thumbnail_central.png",
+      "type": "image/png",
+      "roles": ["thumbnail"],
+      "title": "Thumbnail Image (Central)"
+    },
+    "thumbnail_south": {
+      "href": "s3://bucket/thumbnail_south.png",
+      "type": "image/png",
+      "roles": ["thumbnail"],
+      "title": "Thumbnail Image (South)"
+    },
+    "flood_depth_north": {
+      "href": "s3://bucket/depth_north.tif",
+      "type": "image/tiff; application=geotiff",
+      "roles": ["data"],
+      "title": "Flood Depth (North)"
+    },
+    "flood_depth_central": {
+      "href": "s3://bucket/depth_central.tif",
+      "type": "image/tiff; application=geotiff",
+      "roles": ["data"],
+      "title": "Flood Depth (Central)"
+    },
+    "flood_depth_south": {
+      "href": "s3://bucket/depth_south.tif",
+      "type": "image/tiff; application=geotiff",
+      "roles": ["data"],
+      "title": "Flood Depth (South)"
     }
   }
 }
@@ -206,5 +305,9 @@ stac validate --schema schemas/iceye/v1.0.0/iceye_item.json item.json
 - Initial release
 - Support for flood extent, depth, and building statistics
 - Depth unit standardization to inches
-- Thumbnail generation support
+- Single and multi-region thumbnail support
+  - Primary thumbnail for single-region events
+  - Regional thumbnails (pattern: `thumbnail_*`) for multi-region events
+  - Schema validation using `patternProperties` for flexible thumbnail naming
 - Convex hull geometry representation
+- STAC 1.0.0 compliant with Projection Extension v1.0.0

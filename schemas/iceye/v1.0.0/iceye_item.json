@@ -301,6 +301,8 @@
       "type": "object",
       "properties": {
         "thumbnail": {
+          "title": "Primary Thumbnail",
+          "description": "Primary thumbnail image (single-region events)",
           "$ref": "#/definitions/asset_thumbnail"
         },
         "flood_extent_gpkg": {
@@ -323,6 +325,13 @@
         },
         "release_notes": {
           "$ref": "#/definitions/asset_pdf"
+        }
+      },
+      "patternProperties": {
+        "^thumbnail_": {
+          "title": "Regional Thumbnail",
+          "description": "Thumbnail image for a specific region (multi-region events like Helene)",
+          "$ref": "#/definitions/asset_thumbnail"
         }
       },
       "additionalProperties": {

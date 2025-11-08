@@ -208,8 +208,9 @@ def create_item(event_path, event_id, asset_results, s3_utils, bucket_name, link
         properties["iceye:product_version"] = event_info['product_version']
     if event_info.get('analysis_tier'):
         properties["iceye:analysis_tier"] = event_info['analysis_tier']
-    if event_info.get('code'):
-        properties["proj:code"] = event_info['epsg']
+    if event_info.get('epsg'):
+        # Use proj:code instead of proj:epsg (deprecated in v2.0.0)
+        properties["proj:code"] = f"EPSG:{event_info['epsg']}"
     if event_info.get('pixel_size'):
         properties["iceye:pixel_size"] = event_info['pixel_size']
     if event_info.get('pixel_size_unit'):
@@ -327,18 +328,36 @@ def create_assets(item, event_id, asset_results, s3_utils, bucket_name, link_typ
     """Add assets to the STAC item"""
     asset_paths = asset_results.get('asset_paths', {})
 
-    # Add thumbnail asset if available
-    thumbnail_path = asset_results.get('thumbnail')
-    if thumbnail_path:
+    # Add thumbnail assets if available (supports multiple thumbnails for multi-region events)
+    thumbnail_paths = asset_results.get('thumbnails', [])
+    # Backward compatibility: support old single 'thumbnail' field
+    if not thumbnail_paths and asset_results.get('thumbnail'):
+        thumbnail_paths = [asset_results.get('thumbnail')]
+
+    for idx, thumbnail_path in enumerate(thumbnail_paths):
         thumbnail_href, is_valid = s3_utils.generate_href(bucket_name, thumbnail_path, link_type)
         if is_valid:
+            # Extract region name from filename if available
+            thumbnail_basename = os.path.basename(thumbnail_path)
+            thumbnail_name = os.path.splitext(thumbnail_basename)[0]
+
+            # Determine asset ID and title
+            if len(thumbnail_paths) == 1:
+                asset_id = "thumbnail"
+                title = "Thumbnail Image"
+            else:
+                # Extract region suffix (e.g., "thumbnail_north.png" -> "north")
+                region = thumbnail_name.replace("thumbnail_", "").replace("thumbnail", str(idx + 1))
+                asset_id = f"thumbnail_{region}" if region else f"thumbnail_{idx + 1}"
+                title = f"Thumbnail Image ({region.title()})" if region.isalpha() else f"Thumbnail Image {idx + 1}"
+
             item.add_asset(
-                "thumbnail",
+                asset_id,
                 pystac.Asset(
                     href=thumbnail_href,
                     media_type="image/png",
                     roles=["thumbnail"],
-                    title="Thumbnail Image"
+                    title=title
                 )
             )
         else:
