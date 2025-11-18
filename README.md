@@ -1,25 +1,25 @@
 # BenchmarkCat
 
-A STAC (SpatioTemporal Asset Catalog) benchmark catalog for flood inundation mapping datasets. This repository provides tools to ingest, catalog, and serve various flood modeling and observation datasets in a standardized STAC format.
+A STAC (SpatioTemporal Asset Catalog) benchmark catalog for flood inundation mapping (FIM) datasets. This repository provides tools to ingest, catalog, and serve various flood modeling and observation datasets in STAC format. The purpose of the catalog is to make it easier to find FIMs that can be used to evaluate the output of the National Water Center's (NWCs) flood models.
 
 ## Overview
 
-BenchmarkCat creates and manages a STAC catalog containing multiple collections of flood-related geospatial data:
+BenchmarkCat creates and manages a STAC catalog containing multiple collections of flood-related geospatial data from different sources:
 
-- **Base Level Elevation (BLE)** - FEMA flood extent and depth maps
-- **Global Flood Monitoring (GFM)** - Copernicus satellite-based flood detection
-- **ICEYE** - SAR satellite flood detection and monitoring
-- **AHPS FIM** - NOAA Advanced Hydrologic Prediction Service Flood Inundation Mapping
-- **High Water Marks (HWM)** - USGS observed flood measurements
-- **Ripple** - Flood extent collections
+- **Base Level Elevation (BLE) collection** - FEMA flood extent and depth maps. Thes are the "legacy" BLE FIM's used by the Office of Water Prediction's National Water Center circa 2023.
+- **Global Flood Monitoring (GFM) collection** - Sentinel 1 satellite derived flood extents created by the European Space Agencies Copernicus program. There are two GFM related benchmark collections. One collection covers data from 2015 to 2021 and uses the Dartmouth Flood Observatory collection of flood events to only select GFM data likely to be associated with very large flood events. The other collection is called "GFM expanded" contains a wider variety of inundation observations from 2021 to 2025 and uses the baseline inundation supplied by the GFM system itself to only download events likely to be inundated.
+- **ICEYE collection** - proprietary, satellite derived depth and extent FIMs produced by the company ICEYE by fusing data from their private SAR satellite constellation and publicly available satellite data. 
+- **AHPS FIM** - NOAA Advanced Hydrologic Prediction Service Flood Inundation Mapping extents derived from HEC-RAS models. There are two collections of FIMs associated with AHPS data. One set of FIMs was produced by the National Weather Service and the other set was produced by the USGS.
+- **High Water Marks (HWM) collection** - USGS field surveyed flood measurements. In contrast to the other collections the HWM surveys are collections of point measurements taken along or near the boundary of a flood event's extent (the "highwater mark"). 
+- **Ripple collection** - extent FIM's produced by Dewberry using its ripple and flows2fim software packages. These are HEC-RAS derived FIM's.
 
-All datasets are standardized into STAC format with consistent metadata, making them easily discoverable and comparable for benchmarking flood prediction models.
+All the collections follow a flat collection structure. That is each collection only contains items and doesn't contain sub-collections. Because the main purpose of the collection is model evaluation the most important data included with each item are the FIM observations themselves and estimates of the peak discharges present during the flood event (flowfiles). Each collection contains these two things at a minimum. Where available and when deemed useful, accessory data is also provided.
 
 ## Repository Structure
 
 ```
 benchmarkcat/
-├── ingest/                    # Data ingestion modules
+├── ingest/                    # Data ingestion and STAC metadata creation modules
 │   ├── bench.py              # Shared utilities (S3Utils, RasterUtils, FlowfileUtils)
 │   ├── ble/                  # BLE ingestion
 │   ├── gfm/                  # GFM ingestion
@@ -64,25 +64,11 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-## Data Sources
-
-### Currently Supported Collections
-
-| Collection | Description | Provider | Data Types |
-|------------|-------------|----------|------------|
-| **BLE** | Base Level Elevation flood maps | FEMA | Extent, Depth, Flow files |
-| **GFM** | Global Flood Monitoring | GLOFAS/Copernicus | SAR-based flood detection |
-| **GFM Expanded** | GFM with NWM flow data | GLOFAS + NWM | SAR + hydrologic flows |
-| **ICEYE** | SAR flood detection (latest revisions only) | ICEYE | Extent, Depth, Building stats |
-| **AHPS FIM** | Flood Inundation Mapping | NOAA/NWS | Extent rasters by magnitude |
-| **HWM** | High Water Marks | USGS | Point observations |
-| **Ripple** | Flood extents | Various | Vector extents |
-
 ## Usage
 
 ### Ingesting Data
 
-Each data source has its own ingestion module with a collection script. The general pattern is:
+We call the process of creating STAC metadata for each data source "ingestion". Each data source has its own ingestion module with a collection script. The general pattern is:
 
 ```bash
 python3 -m ingest.<source>.<source>_col \
@@ -157,13 +143,13 @@ To improve performance, derived metadata (geometries, statistics, etc.) is cache
 
 - Location: `benchmark/stac-bench-cat/assets/derived-asset-data/<collection>.parquet`
 - Use `--reprocess_assets` flag to force regeneration
-- Cached data includes: geometries, bounding boxes, statistics, thumbnail paths
+- Cached data includes: geometries, bounding boxes, statistics, thumbnail paths, along with any other metadata that is extracted from a data source during collection creation.
 
 ## Scripts
 
 ### STAC Processor (`scripts/stac_processor.py`)
 
-Process and serve STAC catalogs via HTTP:
+Creates a local STAC catalog from a catalog on an object store. This script also downloads the assets for each item and modifies the asset HREFs to be HTTP links meant to be served from a HTTP file server. This script is currently used in conjunction with stac-migraction.sh to create a local STAC catalog with HTTP links then load that catalog into an API:
 
 ```python
 from scripts.stac_processor import STACProcessor
@@ -177,13 +163,25 @@ processor = STACProcessor(
 processor.process_catalog("path/to/catalog.json")
 ```
 
+### Migrate benchmark STAC (`scripts/stac-migration.sh`)
+
+This script converts a static, self-contained catalog on S3 into a catalog served via a STAC API. It was created as a way to deploy the benchmark STAC to the ParallelWorks environment. One of its main components is stac_processor.py.
+
+For more information on using stac-migration.sh to move the static benchmark STAC on S3 to ParallelWorks see `scripts/migrating-s3-catalog-to-OE.txt` 
+
+There is also a version of the Benchmark STAC API that serves data directly from the object store. Historically this API was updated using the subset of this script that loads a catalog into a STAC API from a collection of static STAC json files.
+
 ### Normalize Catalog (`scripts/normalize_cat.py`)
 
-Normalize STAC catalog structure and links.
+Normalize all relative catalog links relative to an S3 catalog root. This is a convenience script to quickly create a catalog with absolute S3 links between catalog items from a more portable self-contained catalog with relative links.
 
-### Update Asset Links (`scripts/update_asset_links.py`)
+### unzip zip files to S3 prefixs (`scripts/unzip.py`)
 
-Update asset hrefs in STAC items (e.g., convert between S3 URIs and HTTP URLs).
+This script takes a directory of zip files and unzips each archives contents to its own directory inside a target destination directory. This is the script that was used to extract the data provided by ICEYE for the ICEYE collection.
+
+### Upload a single collection to a STAC API(`scripts/recreate_collection.sh`)
+
+This script deletes and recreates a STAC collection on a STAC API. After the collection is recreated in the API it then uploads all items to the API from a directory containing the collection's item JSON. This can be used to refresh individual collections inside the benchmark STAC API that contains S3 HREFs. 
 
 ## STAC Schema
 
@@ -289,7 +287,7 @@ Complex multipolygon flood extents are simplified to convex hulls for STAC items
 
 ### Flowfile Integration
 
-Flood extent collections include associated discharge data from NWM (National Water Model):
+Flood extent collections include associated discharge data from the NWM (National Water Model):
 
 - Flowfiles link stream segments to discharge values
 - Statistics (min, max, mean, median) computed
@@ -403,7 +401,7 @@ When adding new properties to schemas:
 ### Common Issues
 
 **Issue**: `NoCredentialsError` when running ingestion
-- **Solution**: Configure AWS credentials (`aws configure`)
+- **Solution**: Configure AWS credentials (`aws configure`) or copy and paste AWS credentials into the shell you are running the collection creation code from.
 
 **Issue**: Parquet file conflicts
 - **Solution**: Use `--reprocess_assets` flag to regenerate cached data

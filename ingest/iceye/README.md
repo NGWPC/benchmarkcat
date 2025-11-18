@@ -106,7 +106,7 @@ Each STAC item includes the following properties:
 - `proj:wkt2`: WKT2 projection string
 - `start_datetime`: Flood event start time
 - `end_datetime`: Flood event end time
-
+- `datetime`: The time the current release was created this can be after the event in time in the case of post processing.
 ## STAC Assets
 
 Each item includes the following asset types:
