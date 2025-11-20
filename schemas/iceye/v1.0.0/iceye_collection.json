@@ -1,0 +1,361 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "~/benchmarkcat/schemas/iceye/v1.0.0/iceye_collection.json#",
+  "title": "ICEYE Collection Specification",
+  "description": "This object represents ICEYE flood detection and monitoring data Collections in a SpatioTemporal Asset Catalog (STAC). The schema is adapted from STAC spec v1.0.0.",
+  "allOf": [
+    {
+      "$ref": "#/definitions/collection"
+    }
+  ],
+  "definitions": {
+    "collection": {
+      "title": "ICEYE STAC Collection",
+      "description": "These are the fields specific to an ICEYE STAC Collection. All other fields are inherited from STAC Catalog.",
+      "type": "object",
+      "required": [
+        "stac_version",
+        "type",
+        "id",
+        "description",
+        "license",
+        "extent",
+        "links"
+      ],
+      "properties": {
+        "stac_version": {
+          "title": "STAC version",
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "stac_extensions": {
+          "title": "STAC extensions",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "title": "Reference to a JSON Schema",
+            "type": "string",
+            "format": "iri"
+          },
+          "default": [
+            "https://stac-extensions.github.io/item-assets/v1.0.0/schema.json",
+            "https://stac-extensions.github.io/projection/v1.0.0/schema.json"
+          ]
+        },
+        "type": {
+          "title": "Type of STAC entity",
+          "const": "Collection"
+        },
+        "id": {
+          "title": "Identifier",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^iceye-collection$"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string",
+          "minLength": 1
+        },
+        "keywords": {
+          "title": "Keywords",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "license": {
+          "title": "Collection License Name",
+          "type": "string",
+          "const": "proprietary"
+        },
+        "providers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "roles"
+            ],
+            "properties": {
+              "name": {
+                "title": "Organization name",
+                "type": "string",
+                "const": "ICEYE"
+              },
+              "description": {
+                "title": "Organization description",
+                "type": "string"
+              },
+              "roles": {
+                "title": "Organization roles",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "producer",
+                    "licensor",
+                    "processor",
+                    "host"
+                  ]
+                }
+              },
+              "url": {
+                "title": "Organization homepage",
+                "type": "string",
+                "format": "iri"
+              }
+            }
+          }
+        },
+        "extent": {
+          "title": "Extents",
+          "type": "object",
+          "required": [
+            "spatial",
+            "temporal"
+          ],
+          "properties": {
+            "spatial": {
+              "title": "Spatial extent object",
+              "type": "object",
+              "required": [
+                "bbox"
+              ],
+              "properties": {
+                "bbox": {
+                  "title": "Spatial extents",
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "title": "Spatial extent",
+                    "type": "array",
+                    "oneOf": [
+                      {
+                        "minItems": 4,
+                        "maxItems": 4
+                      },
+                      {
+                        "minItems": 6,
+                        "maxItems": 6
+                      }
+                    ],
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            },
+            "temporal": {
+              "title": "Temporal extent object",
+              "type": "object",
+              "required": [
+                "interval"
+              ],
+              "properties": {
+                "interval": {
+                  "title": "Temporal extents",
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "title": "Temporal extent",
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "item_assets": {
+          "title": "Item Assets",
+          "description": "Dictionary of asset objects that can be found in member Items",
+          "type": "object",
+          "properties": {
+            "thumbnail": {
+              "title": "Thumbnail",
+              "description": "Primary thumbnail image (single-region events)",
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "image/png"
+                },
+                "roles": {
+                  "type": "array",
+                  "contains": {
+                    "const": "thumbnail"
+                  }
+                }
+              }
+            },
+            "flood_extent": {
+              "title": "Flood Extent",
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "application/geopackage+sqlite3",
+                    "application/geo+json"
+                  ]
+                },
+                "roles": {
+                  "type": "array",
+                  "contains": {
+                    "const": "data"
+                  }
+                }
+              }
+            },
+            "flood_depth": {
+              "title": "Flood Depth",
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "image/tiff; application=geotiff"
+                },
+                "roles": {
+                  "type": "array",
+                  "contains": {
+                    "const": "data"
+                  }
+                }
+              }
+            },
+            "building_statistics": {
+              "title": "Building Statistics",
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "application/geopackage+sqlite3",
+                    "application/geo+json"
+                  ]
+                },
+                "roles": {
+                  "type": "array",
+                  "contains": {
+                    "const": "data"
+                  }
+                }
+              }
+            },
+            "flood_metadata": {
+              "title": "Flood Metadata",
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "application/json"
+                },
+                "roles": {
+                  "type": "array",
+                  "contains": {
+                    "const": "metadata"
+                  }
+                }
+              }
+            },
+            "release_notes": {
+              "title": "Release Notes",
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "application/pdf"
+                },
+                "roles": {
+                  "type": "array",
+                  "contains": {
+                    "const": "metadata"
+                  }
+                }
+              }
+            }
+          },
+          "patternProperties": {
+            "^thumbnail_": {
+              "title": "Regional Thumbnail",
+              "description": "Thumbnail image for a specific region (multi-region events)",
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "image/png"
+                },
+                "roles": {
+                  "type": "array",
+                  "contains": {
+                    "const": "thumbnail"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "links": {
+          "title": "Links",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/link"
+          }
+        },
+        "summaries": {
+          "type": "object",
+          "properties": {
+            "iceye:event_type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "iceye:product_version": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": [
+        "rel",
+        "href"
+      ],
+      "properties": {
+        "href": {
+          "title": "Link reference",
+          "type": "string",
+          "format": "iri-reference",
+          "minLength": 1
+        },
+        "rel": {
+          "title": "Link relation type",
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "title": "Link type",
+          "type": "string"
+        },
+        "title": {
+          "title": "Link title",
+          "type": "string"
+        }
+      }
+    }
+  }
+}
