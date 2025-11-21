@@ -149,7 +149,7 @@ python3 -m ingest.iceye.iceye_col \
 ```python
 from ingest.iceye import ICEYEAssetHandler, create_iceye_collection
 import boto3
-from ingest.bench import S3Utils
+from ingest.utils import S3Utils
 
 # Initialize S3 utilities
 s3 = boto3.client('s3')

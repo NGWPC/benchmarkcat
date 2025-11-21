@@ -11,8 +11,9 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import MultiPoint, mapping, shape
 
-from ingest.bench import AnaFlowProcessor, RasterUtils, S3Utils
+from ingest.flows import AnaFlowProcessor
 from ingest.iceye.iceye_stac import AssetUtils, ICEYEInfo, extract_dates_from_metadata
+from ingest.utils import RasterUtils, S3Utils
 
 
 class ICEYEAssetHandler:
@@ -469,7 +470,7 @@ class ICEYEAssetHandler:
                     thumbnail_filename = f"thumbnail{region_suffix}.png"
                     local_thumbnail_path = os.path.join(tmpdir, thumbnail_filename)
 
-                    # Use the standardized make_and_upload_thumbnail method from bench.py
+                    # Use the standardized make_and_upload_thumbnail method from utils.py
                     logging.info(f"Generating thumbnail from {file_basename}")
                     thumbnail_s3_path = self.s3_utils.make_and_upload_thumbnail(
                         local_depth_path, local_thumbnail_path, self.bucket_name, depth_file

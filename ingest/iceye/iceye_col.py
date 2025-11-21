@@ -10,9 +10,9 @@ import pystac
 from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.extensions.projection import ProjectionExtension
 
-from ingest.bench import S3Utils
 from ingest.iceye.iceye_handle_assets import ICEYEAssetHandler
 from ingest.iceye.iceye_stac import AssetUtils, ICEYEInfo, extract_dates_from_metadata
+from ingest.utils import S3Utils
 
 logging.basicConfig(level=logging.INFO)
 
