@@ -9,10 +9,11 @@ from datetime import datetime, timezone
 import boto3
 import geopandas as gpd
 import pystac
-from ingest.bench import S3Utils
 from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.extensions.projection import ProjectionExtension
 from shapely.geometry import shape
+
+from ingest.utils import S3Utils
 
 from .ripple_handle_assets import RippleFIMAssetHandler
 from .ripple_stac import RippleInfo

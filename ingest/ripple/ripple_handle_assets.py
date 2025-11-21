@@ -1,15 +1,20 @@
-import os
 import copy
 import json
 import logging
+import os
 import tempfile
-import rasterio
-import pandas as pd
+from typing import Any, Dict, List
+
 import geopandas as gpd
+import pandas as pd
+import rasterio
 from shapely.geometry import shape
-from typing import Dict, Any, List
-from .ripple_stac import RippleInfo, RasterHandler
-from ingest.bench import FlowfileUtils, RasterUtils, S3Utils
+
+from ingest.flows import FlowfileUtils
+from ingest.utils import RasterUtils, S3Utils
+
+from .ripple_stac import RasterHandler, RippleInfo
+
 
 class RippleFIMAssetHandler:
     def __init__(self, s3_utils, bucket_name, derived_metadata_path) -> None:
@@ -33,28 +38,28 @@ class RippleFIMAssetHandler:
             return pd.read_parquet(self.local_results_file)
         else:
             columns = {
-                'item_path': pd.Series(dtype='str'),
-                'source': pd.Series(dtype='str'),
-                'geometry': pd.Series(dtype='str'),
-                'bbox': pd.Series(dtype='str'),
-                'magnitudes': pd.Series(dtype='str'),
-                'extent_areas': pd.Series(dtype='str'),
-                'wkt2_string': pd.Series(dtype='str'),
-                'thumbnail': pd.Series(dtype='str'),  
+                "item_path": pd.Series(dtype="str"),
+                "source": pd.Series(dtype="str"),
+                "geometry": pd.Series(dtype="str"),
+                "bbox": pd.Series(dtype="str"),
+                "magnitudes": pd.Series(dtype="str"),
+                "extent_areas": pd.Series(dtype="str"),
+                "wkt2_string": pd.Series(dtype="str"),
+                "thumbnail": pd.Series(dtype="str"),
             }
             return pd.DataFrame(columns)
 
     def assets_processed(self, item_path: str) -> bool:
         """Check if assets for this item path have been processed"""
-        return item_path in self.results_df['item_path'].values
+        return item_path in self.results_df["item_path"].values
 
     def read_data_parquet(self, item_path: str) -> Dict[str, Any]:
         """Read processed data for an item path from the parquet file"""
-        row = self.results_df[self.results_df['item_path'] == item_path]
+        row = self.results_df[self.results_df["item_path"] == item_path]
         if not row.empty:
-            result = row.to_dict(orient='records')[0]
+            result = row.to_dict(orient="records")[0]
             # Convert JSON strings back to objects
-            for field in ['geometry', 'bbox', 'magnitudes', 'extent_areas']:
+            for field in ["geometry", "bbox", "magnitudes", "extent_areas"]:
                 if result.get(field):
                     try:
                         result[field] = json.loads(result[field])
@@ -67,9 +72,9 @@ class RippleFIMAssetHandler:
         results = {}
         magnitudes = []
         extent_areas = {}
-    
+
         # Get list of tiff files and their magnitudes
-        tiff_files = self.s3_utils.list_files_with_extensions(self.bucket_name, item_path, ['.tif'])
+        tiff_files = self.s3_utils.list_files_with_extensions(self.bucket_name, item_path, [".tif"])
 
         # Create thumbnail from first extent raster
         if tiff_files:
@@ -83,31 +88,26 @@ class RippleFIMAssetHandler:
             first_tiff = tiff_files[0]
             local_tiff = os.path.join(tmpdir, os.path.basename(first_tiff))
             self.s3_utils.s3_client.download_file(self.bucket_name, first_tiff, local_tiff)
-        
+
             # Get geometry, bbox, and model domain once
             convex_hull, bbox, domain = RasterHandler.create_domain_geometry(local_tiff)
             wkt2_string = RasterHandler.get_wkt2_string(local_tiff)
-        
+
             # Create and upload gpkg for the model domain
-            gpkg_name = "model_domain.gpkg"  
+            gpkg_name = "model_domain.gpkg"
             local_gpkg = os.path.join(tmpdir, gpkg_name)
-        
+
             # Create GeoDataFrame with model domain MultiPolygon
             with rasterio.open(local_tiff) as src:
-                gdf = gpd.GeoDataFrame(
-                    {
-                        'geometry': [shape(domain)]
-                    }, 
-                    crs=src.crs
-                )
-                gdf.to_file(local_gpkg, driver='GPKG')
-        
+                gdf = gpd.GeoDataFrame({"geometry": [shape(domain)]}, crs=src.crs)
+                gdf.to_file(local_gpkg, driver="GPKG")
+
             s3_gpkg_path = os.path.join(item_path, gpkg_name)
             self.s3_utils.s3_client.upload_file(local_gpkg, self.bucket_name, s3_gpkg_path)
 
         # Process all tiffs just for magnitudes and extent areas
         for tiff in tiff_files:
-            magnitude = os.path.basename(tiff).split('_')[0]
+            magnitude = os.path.basename(tiff).split("_")[0]
             magnitudes.append(magnitude)
 
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -116,7 +116,7 @@ class RippleFIMAssetHandler:
 
                 # Calculate extent area with specified resolution
                 extent_areas[magnitude] = RasterHandler.calculate_extent_area(local_tiff, resolution)
-            
+
         results[item_path] = {
             "source": source,
             "geometry": convex_hull,
@@ -124,8 +124,8 @@ class RippleFIMAssetHandler:
             "magnitudes": magnitudes,
             "extent_areas": extent_areas,
             "wkt2_string": wkt2_string,
-            "thumbnail": thumbnail_path  
-        }    
+            "thumbnail": thumbnail_path,
+        }
 
         self.write_data_parquet(results)
         return results[item_path]
@@ -134,71 +134,49 @@ class RippleFIMAssetHandler:
         """Process collection-level CONUS flow files"""
         flowfile_ids = []
         flowfile_keys = []
-        
+
         # Get all CONUS flow files
-        flow_files = self.s3_utils.list_files_with_extensions(
-            self.bucket_name, 
-            asset_object_key,
-            ['.csv']
-        )
-        
+        flow_files = self.s3_utils.list_files_with_extensions(self.bucket_name, asset_object_key, [".csv"])
+
         for flow_file in flow_files:
-            if 'nwm_return_period_flows' in flow_file:
-                flowfile_id = flow_file.replace('.csv', '')  # Remove .csv extension
+            if "nwm_return_period_flows" in flow_file:
+                flowfile_id = flow_file.replace(".csv", "")  # Remove .csv extension
                 flowfile_ids.append(flowfile_id)
                 flowfile_keys.append(flow_file)
 
         # Process flowfiles using existing utilities
-        flowfile_dfs = FlowfileUtils.download_flowfiles(
-            self.bucket_name,
-            flowfile_keys,
-            self.s3_utils.s3_client
-        )
+        flowfile_dfs = FlowfileUtils.download_flowfiles(self.bucket_name, flowfile_keys, self.s3_utils.s3_client)
         flowstats_list = FlowfileUtils.extract_flowstats(flowfile_dfs)
-        
+
         # Create flowfile object
-        flowfile_object = FlowfileUtils.create_flowfile_object(
-            flowfile_ids,
-            flowstats_list,
-            RippleInfo.columns_list
-        )
-        
-        return {
-            "flowfile_ids": flowfile_ids,
-            "flowfile_keys": flowfile_keys,
-            "flowfile_object": flowfile_object
-        }
+        flowfile_object = FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats_list, RippleInfo.columns_list)
+
+        return {"flowfile_ids": flowfile_ids, "flowfile_keys": flowfile_keys, "flowfile_object": flowfile_object}
 
     def create_and_add_thumbnail(self, first_extent_path: str) -> str:
         """Create and upload a thumbnail for the first extent raster."""
         with tempfile.TemporaryDirectory() as tmpdir:
             local_extent_path = os.path.join(tmpdir, os.path.basename(first_extent_path))
-            local_thumbnail_path = os.path.join(tmpdir, 'thumbnail.png')
-        
+            local_thumbnail_path = os.path.join(tmpdir, "thumbnail.png")
+
             # Download extent raster
-            self.s3_utils.s3_client.download_file(
-                self.bucket_name,
-                first_extent_path,
-                local_extent_path
-            )
-        
+            self.s3_utils.s3_client.download_file(self.bucket_name, first_extent_path, local_extent_path)
+
             # Create and upload thumbnail
             thumbnail_s3_path = self.s3_utils.make_and_upload_thumbnail(
-                local_extent_path,
-                local_thumbnail_path,
-                self.bucket_name,
-                first_extent_path
+                local_extent_path, local_thumbnail_path, self.bucket_name, first_extent_path
             )
-        
+
             return thumbnail_s3_path
 
     def write_data_parquet(self, results):
         results_copy = copy.deepcopy(results)
-    
+
         # Custom JSON encoder to handle numpy types
         class NumpyJSONEncoder(json.JSONEncoder):
             def default(self, obj):
                 import numpy as np
+
                 if isinstance(obj, np.integer):
                     return int(obj)
                 if isinstance(obj, np.floating):
@@ -206,23 +184,25 @@ class RippleFIMAssetHandler:
                 if isinstance(obj, np.ndarray):
                     return obj.tolist()
                 return super().default(obj)
-    
+
         for path, data in results_copy.items():
             # Ensure geometry and bbox are serialized
-            if data.get('geometry'):
-                data['geometry'] = json.dumps(data['geometry'])
-            if data.get('bbox'):
-                data['bbox'] = json.dumps(data['bbox'])
-            if data.get('magnitudes'):
-                data['magnitudes'] = json.dumps(data['magnitudes'])
-            if data.get('extent_areas'):
-                data['extent_areas'] = json.dumps(data['extent_areas'], cls=NumpyJSONEncoder)
+            if data.get("geometry"):
+                data["geometry"] = json.dumps(data["geometry"])
+            if data.get("bbox"):
+                data["bbox"] = json.dumps(data["bbox"])
+            if data.get("magnitudes"):
+                data["magnitudes"] = json.dumps(data["magnitudes"])
+            if data.get("extent_areas"):
+                data["extent_areas"] = json.dumps(data["extent_areas"], cls=NumpyJSONEncoder)
 
-        new_df = pd.DataFrame.from_dict(results_copy, orient='index').reset_index().rename(columns={'index': 'item_path'})
-    
-        for item_path in new_df['item_path']:
-            self.results_df = self.results_df[self.results_df['item_path'] != item_path]
-    
+        new_df = (
+            pd.DataFrame.from_dict(results_copy, orient="index").reset_index().rename(columns={"index": "item_path"})
+        )
+
+        for item_path in new_df["item_path"]:
+            self.results_df = self.results_df[self.results_df["item_path"] != item_path]
+
         self.results_df = pd.concat([self.results_df, new_df], ignore_index=True)
         self.results_df.to_parquet(self.local_results_file, index=False)
 
@@ -236,4 +216,3 @@ class RippleFIMAssetHandler:
             if os.path.exists(self.local_results_file):
                 os.remove(self.local_results_file)
                 logging.info(f"Removed local file {self.local_results_file}")
-
