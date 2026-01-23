@@ -15,17 +15,15 @@ This document outlines the deployment strategy for BenchmarkCat STAC (SpatioTemp
 ### Key Objectives
 
 - Deploy 24/7 STAC API in OWP AWS environment
-- Support OWP users with deployment and documentation
 - Provide access to 1.5 TB of geospatial benchmark assets via S3
 - Enable easy access via STAC Browser and QGIS integration
 - Minimize operational costs while maintaining performance
-- Establish backup and disaster recovery procedures for OWP deployment
 
 ---
 
 ## Reference Deployments (NGWPC Internal)
 
-The OWP deployment will be based on lessons learned from two NGWPC internal environments that serve as reference architectures. **These internal environments will remain operational** for NGWPC development and testing purposes.
+The OWP deployment is based on two NGWPC internal environments that will remain operational:
 
 ### NGWPC OE (Reference Architecture 1)
 
@@ -43,265 +41,176 @@ The OWP deployment will be based on lessons learned from two NGWPC internal envi
 **Access:** HTTP on ports 8000 (API), 8081 (Browser)
 **Architecture:** Simplified 2-container deployment, no separate file server
 
-### Key Improvements for OWP Deployment
-
-Based on these reference deployments, the OWP deployment will feature:
-
-- S3-native asset storage (no local file dependencies)
-- Simplified architecture without separate file server
-- Self-contained docker-compose deployment
-- Standardized backup and monitoring procedures
-- 24/7 availability independent of developer workflows
-
 ---
 
 ## OWP Deployment Architecture
 
-### Design Principles
+**Design Principles:**
+- S3 as single source of truth (all 1.5 TB of benchmark assets)
+- Self-contained docker-compose deployment (PostgreSQL + STAC API)
+- Always-on availability (independent of developer EC2 lifecycle)
+- Direct S3 asset access via GDAL Virtual File System (no file server needed)
 
-1. **S3 as Single Source of Truth:** All 1.5 TB of benchmark assets stored in S3
-2. **Self-Contained Deployment:** PostgreSQL and STAC API in single docker-compose stack
-3. **Always-On Availability:** Services independent of developer EC2 lifecycle
-4. **GDAL Integration:** Direct S3 asset access via GDAL Virtual File System
-5. **Cost-Effective Scalability:** Architecture supports future growth without major redesign
+**Components:**
 
-### Target Architecture for OWP
-
-**Application Layer:**
+Application Layer:
 - STAC API (FastAPI) - Port 8082
 - PostgreSQL with pgstac extension - Port 5432 (internal)
 - STAC Browser - Port 8080
 
-**Storage Layer:**
+Storage Layer:
 - S3 Bucket (fimc-data): 1.5 TB of geospatial assets
-- STAC Catalog: 22,845 catalog files (collections, items, metadata)
-- Organized structure: benchmark/, rs/iceye/, rs/PI4/, etc.
+- STAC Catalog: 22,845 catalog files
 
-**Access Layer:**
-- OWP users: AWS SSO for S3 access, HTTP for STAC API
-- OWP developer EC2s: Shut down nightly, connect to always-on STAC service
-- QGIS integration: Direct STAC API connection for data visualization
+Access Layer:
+- OWP users: AWS SSO for S3, HTTP for STAC API
+- QGIS integration: Direct STAC API connection
 
 ---
 
-## Deployment Options Comparison
+## Deployment Options
 
-### Option A: Dedicated Always-On EC2 Instance (RECOMMENDED)
+### Option A: Dedicated EC2 Instance (RECOMMENDED)
 
-**Architecture:** Single EC2 instance (t3.large) running 24/7 with Docker Compose stack
+**Architecture:** Single t3.large EC2 instance running 24/7 with docker-compose stack
 
-**Advantages:**
+**Monthly Cost:** ~$125 (EC2 $60 + EBS $8 + S3 $35 + data transfer $10-15 + backups $1-2 + CloudWatch $5-10)
+
+**Pros:**
 - Simple deployment and management
-- Lower monthly cost (~$115-120/month)
-- Easy troubleshooting and debugging
+- 40% cheaper than Fargate
+- Easy troubleshooting
 - Straightforward PostgreSQL backups
-- Direct docker-compose deployment
 
-**Considerations:**
-- Single point of failure (mitigated with AMI backups and monitoring)
-- Manual OS/security patching required
-- Manual scaling if user count grows significantly
+**Cons:**
+- Single point of failure (mitigated with AMI backups)
+- Manual OS patching
+- Manual scaling if needed
 
-**Best For:** Current OWP requirements (stable workload)
+**Best For:** Current OWP requirements (stable workload, cost-effective)
 
 ---
 
-### Option B: ECS Fargate with Task Scheduling
+### Option B: ECS Fargate
 
 **Architecture:** ECS Fargate tasks with RDS or EFS-backed PostgreSQL
 
-**Advantages:**
-- No server management required
+**Monthly Cost:** ~$200 (Fargate $90-105 + EFS/RDS $10-15 + S3 $35 + ALB $25 + data transfer $15-20 + backups $1-2 + CloudWatch $5-10)
+
+**Pros:**
+- No server management
 - Automatic high availability (multi-AZ)
-- Built-in load balancing and auto-scaling
-- Integrated AWS monitoring and logging
-- Infrastructure as Code
+- Auto-scaling capabilities
 
-**Considerations:**
-- Higher cost (~$185-215/month)
-- More complex initial setup
+**Cons:**
+- 60% more expensive
+- More complex setup
 - Steeper learning curve
-- More difficult debugging (CloudWatch logs)
 
-**Best For:** Future growth scenarios (high availability requirements)
+**Best For:** Future growth scenarios with high availability requirements
 
 ---
 
-## Storage Strategy: S3 vs EFS
+## Storage Strategy
 
-### S3-Only Approach (RECOMMENDED)
+**S3-Only Approach (RECOMMENDED)**
 
-**Cost Comparison for 1.5 TB:**
+| Storage Type | Monthly Cost (1.5 TB) | Notes |
+|--------------|--------------|-------|
+| S3 Standard | $35 | Recommended baseline |
+| S3 Standard-IA (90+ days) | $19 | 45% savings for infrequent access |
+| EFS Standard | $461 | 13x more expensive - NOT recommended |
 
-| Storage Type | Monthly Cost | Difference |
-|--------------|--------------|------------|
-| S3 Standard | $35 | Baseline |
-| S3 Standard-IA (after 90 days) | $19 | 46% savings |
-| EFS Standard | $461 | 13x more expensive |
-
-**Key Benefits:**
-- 93% cheaper than EFS
-- 99.999999999% durability (11 nines)
-- No synchronization required
-- Native GDAL support via Virtual File System
+**Why S3:**
+- 93% cheaper than EFS ($35 vs $461/month)
+- 99.999999999% durability
+- Native GDAL VSI support (no file server needed)
 - Unlimited scalability
-- Lifecycle policies for automatic archival
-
-**Performance Considerations:**
-- GDAL VSI caching (1GB cache) mitigates latency
-- Optimized for large geospatial files
-- Sufficient for current OWP user load
-- Can provision AWS S3 File Gateway to improve performance if necessary
+- Lifecycle policies for automatic cost optimization
+- GDAL caching (1GB) provides good performance
 
 ---
 
-## Deployment Timeline
+## Implementation Plan
 
-| Phase | Key Activities |
-|-------|----------------|
-| **1. Preparation** | Internal NGWPC Testing/validation, S3 access verification, OWP AWS infrastructure planning |
-| **2. Environment Setup** | EC2 launch in OWP AWS Acct, Docker installation, configuration |
-| **3. Data Loading** | Load catalog (22,845 files) metadata from S3 to PostgreSQL |
-| **4. Testing & Validation** | API health checks, Browser testing, QGIS integration with OWP users |
-| **5. Production Launch** | Documentation, user training, announce availability |
-| **6. Monitoring Period** | Stability monitoring, performance tuning, user support |
+### Phase 1: Pre-Deployment Testing (NGWPC TEST Account)
+1. Provision AWS resources (EC2, security groups, IAM roles)
+2. Deploy docker-compose stack
+3. Load subset of STAC catalog (e.g., iceye collection)
+4. Validate S3 asset accessibility via GDAL VSI
+5. Document findings and create OWP deployment guide
+
+### Phase 2: OWP Deployment
+1. Verify NGWPC access to OWP AWS (or prepare handoff documentation)
+2. Plan S3 data transfer (NGWPC S3 → OWP S3, or cross-account access)
+3. Provision OWP AWS resources
+4. Deploy docker-compose stack
+5. Load full STAC catalog (22,845 files) to PostgreSQL
+6. Validate S3 asset accessibility
+
+### Phase 3: Validation & Launch
+1. API health checks (/, /conformance, /collections, /search)
+2. STAC Browser functionality testing
+3. QGIS integration testing with OWP users
+4. Performance validation (response times, concurrent users)
+5. Configure backups and monitoring
+6. Conduct OWP team training
+7. Production launch
 
 ---
 
 ## Success Criteria
 
-The OWP deployment will be considered successful when all of the following are verified:
-
-**Technical Criteria:**
-- STAC API responding correctly on all endpoints (/, /conformance, /collections, /search)
+**Technical Validation:**
+- STAC API endpoints functional (/, /conformance, /collections, /search)
 - All collections visible in STAC Browser
-- Assets accessible from S3 via GDAL (tested with sample files)
-- QGIS successfully connects and loads raster data
-- API response time is adequate for search queries
-- Support for concurrent users without degradation
+- S3 assets accessible via GDAL VSI
+- QGIS successfully connects and loads data
+- Adequate response times and concurrent user support
 
-**Operational Criteria:**
-- PostgreSQL automated backups running weekly
-- Monitoring and alerting configured and tested
-- Documentation complete and accessible to OWP team
-- OWP team members trained on STAC access and usage
-
----
-
-## Cost Summary
-
-### Estimated Ongoing Monthly Costs
-
-**Recommended Approach (EC2 + S3):**
-
-| Item | Monthly Cost |
-|------|-------------|
-| Infrastructure (EC2, EBS, S3, data transfer) | $115-120 |
-| Backup storage | $1-2 |
-| Monitoring/alerting (CloudWatch) | $5-10 |
-| **TOTAL MONTHLY** | **~$125** |
-
-**Alternative Approach (ECS Fargate + S3):**
-
-| Item | Monthly Cost |
-|------|-------------|
-| Infrastructure (Fargate, EFS, S3, ALB, data transfer) | $185-215 |
-| Backup storage | $1-2 |
-| Monitoring/alerting | $5-10 |
-| **TOTAL MONTHLY** | **~$200** |
-
-### Cost Optimization Opportunities
-
-- S3 lifecycle policies: Move infrequently accessed data to Standard-IA after 90 days (~50% savings)
-- Right-sizing: Start with t3.large, scale up only if needed based on monitoring
-- Reserved Instances: 1-year commitment reduces EC2 costs by ~30% 
+**Operational Readiness:**
+- PostgreSQL weekly backups configured
+- CloudWatch monitoring and alerting active
+- Complete documentation delivered to OWP team:
+  - Architecture overview
+  - Deployment scripts and docker-compose files
+  - QGIS connection instructions
+  - Operational runbook (maintenance, troubleshooting)
+  - Disaster recovery procedures
+- OWP team training completed
 
 ---
 
 ## Backup & Disaster Recovery
 
-### Backup Strategy
-
 **PostgreSQL Database:**
-- Automated weekly backups
+- Weekly automated backups to S3
 - 7-day local retention
-- Continuous S3 backup synchronization
-- Estimated database size: 5-10 GB (metadata only)
-- Backup storage cost: ~$1-2/month
+- Database size: 5-10 GB (metadata only)
+- Recovery time: < 30 minutes
 
 **EC2 Instance:**
-- AMI snapshots
-- Configuration stored in git repository
+- Monthly/Weekly AMI snapshots
+- Configuration in git repository
 - Recovery time: < 1 hour from AMI
 
 **S3 Assets (1.5 TB):**
-- S3 versioning (optional, additional cost)
-- Re-ingestion capability from original sources
-
----
-
-## Next Steps
-
-### Action items
-
-1. **OWP Stakeholder Approval:** Review and approve this deployment strategy
-2. **Test and Validate on NGWPC AWS TEST Account**: Confirm proposed strategy works, iron out kinks 
-3. **OWP AWS Access:** Verify NGWPC access to provision resources in OWP AWS environment - S3, EC2, etc
-4. **S3 Access:** Plan data transfer from NGWPC S3 to OWP S3 bucket. Confirm OWP AWS can access new benchmark data bucket
-
-If 3. and 4. are not feasible, additional work with documentation and scripts will need to be written for OWP staff. 
-
-### **TEST** Implementation Sequence (NGWPC)
-
-1. Provision AWS resources in NGWPC TEST environment (EC2, security groups, IAM roles, etc)
-2. Deploy Docker Compose stack in NGWPC TEST AWS
-3. Load subset of STAC catalog metadata (just iceye?) from S3 to NGWPC PostgreSQL instance
-4. Validate S3 asset accessibility from NGWPC environment
-5. Create and validate documentation delivered to OWP
-
-### Implementation Sequence (OWP)
-
-1. Provision AWS resources in OWP environment (EC2, security groups, IAM roles)
-2. Deploy Docker Compose stack in OWP AWS
-3. Load STAC catalog metadata from S3 to OWP PostgreSQL instance
-4. Validate S3 asset accessibility from OWP environment
-5. Conduct user acceptance testing with OWP team
-6. Launch for production use
-7. Provide OWP team training and documentation
-8. Monitor and optimize with OWP team feedback
-
-### Documentation Requirements for OWP Team
-- Technical documentation of whole architecture
-- Repository containing key files and scripts for easy deployment
-- STAC API endpoint documentation (STAC Browser & OWP-specific URLs)
-- QGIS connection instructions for OWP users
-- Operational runbook for common maintenance tasks
-- Disaster recovery procedures for OWP deployment
-- Monitoring and alerting playbook
+- S3 native durability (99.999999999%)
+- Optional: S3 versioning or cross-region replication
+- Re-ingestion capability from original sources if needed
 
 ---
 
 ## Recommendations
 
-### Primary Recommendation
+**Primary:** Deploy Option A (EC2 + S3) for its simplicity, lower cost, and clear upgrade path to Fargate if needed.
 
-**Deploy using Option A (Dedicated EC2 with S3 storage):**
-
-**Rationale:**
-- Meets all OWP requirements (24/7 availability)
-- 40% lower cost than Fargate alternative
-- Simpler deployment reduces implementation risk
-- Easier for OWP team to troubleshoot and maintain
-- Clear upgrade path to Fargate if OWP requirements change
-
-### Secondary Recommendations
-
-1. **Start with S3 Standard storage:** Implement lifecycle policies after OWP usage patterns are established
-2. **AMI backups:** Automate via AWS Backup service for consistent disaster recovery
-3. **CloudWatch monitoring:** Set up basic alerting for CPU, memory, and disk usage
-4. **Basic authentication:** Use nginx with htpasswd for simple access control initially
-5. **Documentation priority:** Focus on operational procedures to ensure OWP team readiness
-6. **Training sessions:** Conduct hands-on training with OWP users on deployment, architecture, QGIS and STAC Browser access
+**Additional:**
+1. Start with S3 Standard; add lifecycle policies after establishing usage patterns
+2. Automate monthly/weekly AMI backups via AWS Backup
+3. Configure CloudWatch alerts for CPU, memory, and disk usage
+4. Prioritize operational documentation for OWP team self-sufficiency
+5. Conduct hands-on training with OWP users (QGIS, STAC Browser, troubleshooting)
 
 ---
 
