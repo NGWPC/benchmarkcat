@@ -9,7 +9,6 @@ when HUCs cross tile boundaries.
 
 import logging
 import os
-import tempfile
 from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
@@ -162,10 +161,13 @@ def _get_mosaic_masked_array(
 
     try:
         for fpath in tile_files.values():
-            if os.path.exists(fpath):
+            try:
                 src = rasterio.open(fpath)
                 files_to_close.append(src)
                 src_files_to_mosaic.append(src)
+            except (rasterio.RasterioIOError, OSError) as e:
+                logger.debug("Could not open %s for mosaic: %s", fpath, e)
+                continue
 
         if not src_files_to_mosaic:
             return None
@@ -224,14 +226,14 @@ def _compute_huc_metrics(
     huc_geom_original: Geometry,
     equi7tiles_list: List[str],
     s3_utils: Any,
-    temp_dir: str,
     huc_crs: Any,
 ) -> Dict[str, Any]:
     """Compute per-HUC reliability and severity metrics (mosaic then clip to HUC).
 
-    Downloads required layer rasters for each tile, mosaics them, clips to the
-    HUC polygon in raster CRS, then computes: flood area (km²), mean uncertainty,
-    observability %, advisory noise %, affected population, normalized anomaly ratio.
+    Opens required layer COGs from S3 via s3:// URIs (streaming), mosaics them,
+    clips to the HUC polygon in raster CRS, then computes: flood area (km²),
+    mean uncertainty, observability %, advisory noise %, affected population,
+    normalized anomaly ratio.
 
     Args:
         bucket_name: S3 bucket name.
@@ -239,8 +241,7 @@ def _compute_huc_metrics(
         huc8_id: HUC8 identifier (e.g. 12060101).
         huc_geom_original: HUC polygon in huc_crs (e.g. EPSG:4326).
         equi7tiles_list: List of equi7tile ids in the scene.
-        s3_utils: S3 utilities (download, list).
-        temp_dir: Local directory for temporary raster files.
+        s3_utils: S3 utilities (list).
         huc_crs: CRS of huc_geom_original (e.g. GeoDataFrame.crs).
 
     Returns:
@@ -256,39 +257,26 @@ def _compute_huc_metrics(
         "normalized_anomaly_ratio": 0.0
     }
 
-    # 1. Download FLOOD layer for one tile to determine CRS/NoData
-    # We accept that different tiles *should* have same CRS/NoData.
+    # 1. Build S3 URIs for all layers/tiles; get CRS/NoData from first valid FLOOD.
     metadata = None
     local_paths = {ly: {} for ly in REQUIRED_LAYERS}
 
-    # Download loop
     for tile in equi7tiles_list:
         keys = _resolve_layer_keys(s3_utils, bucket_name, sent_ti_path, tile)
-        if not keys["ENSEMBLE_FLOOD"]: continue
+        if not keys["ENSEMBLE_FLOOD"]:
+            continue
 
         for layer, key in keys.items():
             if key:
-                fname = f"{tile}_{layer}.tif"
-                fpath = os.path.join(temp_dir, fname)
-                if not os.path.exists(fpath):
-                    try:
-                        s3_utils.s3_client.download_file(bucket_name, key, fpath)
-                    except Exception as e:
-                        logger.debug(
-                            "Failed to download %s for HUC %s: %s",
-                            key,
-                            huc8_id,
-                            e,
-                            exc_info=False,
-                        )
-                        continue
-                local_paths[layer][tile] = fpath
+                local_paths[layer][tile] = f"s3://{bucket_name}/{key}"
 
-                # Capture metadata from the first valid Flood file we see
-                if layer == "ENSEMBLE_FLOOD" and metadata is None and os.path.exists(fpath):
-                    metadata = _get_raster_metadata(fpath)
-                    if metadata is None:
-                        logger.debug("Could not read raster metadata from %s", fpath)
+        if metadata is None and local_paths["ENSEMBLE_FLOOD"].get(tile):
+            metadata = _get_raster_metadata(local_paths["ENSEMBLE_FLOOD"][tile])
+            if metadata is None:
+                logger.debug(
+                    "Could not read raster metadata from %s",
+                    local_paths["ENSEMBLE_FLOOD"][tile],
+                )
 
     if metadata is None:
         logger.debug("No valid flood raster metadata for HUC %s", huc8_id)
@@ -468,50 +456,49 @@ def compute_scene_qc(
     scene_highest_impact = "Low"
     active_hucs = []
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for huc8_id in huc8_list:
-            try:
-                row = hucs_gdf[hucs_gdf["HUC8"].astype(str) == str(huc8_id)]
-                if row.empty:
-                    continue
-                huc_geom = row.geometry.iloc[0]
+    for huc8_id in huc8_list:
+        try:
+            row = hucs_gdf[hucs_gdf["HUC8"].astype(str) == str(huc8_id)]
+            if row.empty:
+                continue
+            huc_geom = row.geometry.iloc[0]
 
-                # Explicit empty check
-                if huc_geom is None or huc_geom.is_empty:
-                    continue
-
-            except Exception as e:
-                logger.debug(
-                    "Skipping HUC %s (lookup or geometry error): %s",
-                    huc8_id,
-                    e,
-                    exc_info=False,
-                )
+            # Explicit empty check
+            if huc_geom is None or huc_geom.is_empty:
                 continue
 
-            metrics = _compute_huc_metrics(
-                bucket_name, sent_ti_path, huc8_id, huc_geom,
-                equi7tiles_list, s3_utils, temp_dir, huc_crs=hucs_gdf.crs
+        except Exception as e:
+            logger.debug(
+                "Skipping HUC %s (lookup or geometry error): %s",
+                huc8_id,
+                e,
+                exc_info=False,
             )
+            continue
 
-            grade = _grade_qc(scene_data_complete, metrics)
-            impact = _impact_score(metrics["flood_area_km2"], metrics["affected_pop"])
+        metrics = _compute_huc_metrics(
+            bucket_name, sent_ti_path, huc8_id, huc_geom,
+            equi7tiles_list, s3_utils, huc_crs=hucs_gdf.crs
+        )
 
-            huc_summaries.append({
-                "huc8_id": str(huc8_id),
-                "qc_grade": grade,
-                "impact": impact,
-                "metrics": metrics,
-            })
+        grade = _grade_qc(scene_data_complete, metrics)
+        impact = _impact_score(metrics["flood_area_km2"], metrics["affected_pop"])
 
-            total_flood_area_km2 += metrics["flood_area_km2"]
+        huc_summaries.append({
+            "huc8_id": str(huc8_id),
+            "qc_grade": grade,
+            "impact": impact,
+            "metrics": metrics,
+        })
 
-            if grade_rank[grade] > grade_rank[scene_best_grade]:
-                scene_best_grade = grade
-            if impact_rank[impact] > impact_rank[scene_highest_impact]:
-                scene_highest_impact = impact
-            if grade in ("A", "B"):
-                active_hucs.append(str(huc8_id))
+        total_flood_area_km2 += metrics["flood_area_km2"]
+
+        if grade_rank[grade] > grade_rank[scene_best_grade]:
+            scene_best_grade = grade
+        if impact_rank[impact] > impact_rank[scene_highest_impact]:
+            scene_highest_impact = impact
+        if grade in ("A", "B"):
+            active_hucs.append(str(huc8_id))
 
     return {
         "owp:qc_grade": scene_best_grade,

@@ -438,6 +438,17 @@ def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfi
 def main():
     args = parse_arguments()
     s3_utils = initialize_s3_utils(profile=args.profile)
+    if args.profile is not None:
+        os.environ["AWS_PROFILE"] = args.profile
+    else:
+        os.environ.pop("AWS_PROFILE", None)
+
+    # Prevents expensive S3 ListObjects calls when opening a file
+    os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"
+
+    # Increases the size of the first request to grab headers + metadata in one go
+    os.environ["CPL_VSIL_CURL_CHUNK_SIZE"] = "65536"
+
     collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
