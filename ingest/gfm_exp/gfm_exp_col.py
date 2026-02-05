@@ -2,15 +2,15 @@ import time
 import argparse
 import json
 import logging
+import multiprocessing
 import os
-import pdb
 import re
 import tempfile
 from datetime import datetime, timezone
+from functools import partial
 
 import boto3
 import geopandas as gpd
-import pandas as pd
 import pystac
 from botocore.exceptions import ClientError
 from pystac.extensions.item_assets import ItemAssetsExtension
@@ -80,6 +80,12 @@ def parse_arguments():
         type=str,
         default=None,
         help="AWS profile name for boto3 (e.g. from ~/.aws/credentials).",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers for scene processing; 1 = sequential.",
     )
     return parser.parse_args()
 
@@ -187,19 +193,21 @@ def process_date(
 
     sent_ti_list = s3_utils.list_subdirectories(bucket_name, date_path)
     for sent_ti_path in sent_ti_list:
-        process_tile(
+        item, asset_results = process_tile(
             sent_ti_path,
             date_id,
             s3_utils,
             bucket_name,
             link_type,
-            collection,
             reprocess_assets,
             asset_handler,
             hucs_gdf,
             country_boundaries,
             skip_owp_qc=skip_owp_qc,
         )
+        if item is not None and asset_results is not None:
+            collection.add_item(item)
+            asset_handler.merge_single_result(sent_ti_path, asset_results)
 
 
 def get_flood_ratios(s3_utils, bucket_name, sent_ti_path):
@@ -219,7 +227,6 @@ def process_tile(
     s3_utils,
     bucket_name,
     link_type,
-    collection,
     reprocess_assets,
     asset_handler,
     hucs_gdf=None,
@@ -254,7 +261,7 @@ def process_tile(
         # Check if geometry is within Canada or Mexico before proceeding
         if country_boundaries and is_within_neighbor_countries(geometry, country_boundaries):
             logging.info(f"Skipping {sent_ti} - geometry lies completely within Canada or Mexico")
-            return
+            return (None, None)
 
         # Find intersecting HUC8s if HUCs data is provided
         if hucs_gdf is not None:
@@ -311,7 +318,7 @@ def process_tile(
     )
 
     item.validate()
-    collection.add_item(item)
+    return (item, asset_results)
 
 
 def get_orbit_info(sent_ti_path, s3_utils, bucket_name):
@@ -435,6 +442,50 @@ def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfi
     return asset_id, asset
 
 
+def _process_one_scene(
+    work_item,
+    profile,
+    bucket_name,
+    link_type,
+    reprocess_assets,
+    skip_owp_qc,
+    hucs_gdf,
+    country_boundaries,
+    derived_metadata_path,
+    initial_results_df=None,
+):
+    """Top-level worker for parallel scene processing. Creates own s3_utils and asset_handler."""
+    date_path, date_id, sent_ti_path = work_item
+    if profile is not None:
+        os.environ["AWS_PROFILE"] = profile
+    else:
+        os.environ.pop("AWS_PROFILE", None)
+
+    # Prevents expensive S3 ListObjects calls when opening a file
+    os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"
+
+    # Increases the size of the first request to grab headers + metadata in one go
+    os.environ["CPL_VSIL_CURL_CHUNK_SIZE"] = "65536"
+
+    s3_utils = initialize_s3_utils(profile=profile)
+    asset_handler = GFMExpAssetHandler(
+        s3_utils, bucket_name, derived_metadata_path, initial_results_df=initial_results_df
+    )
+    item, asset_results = process_tile(
+        sent_ti_path,
+        date_id,
+        s3_utils,
+        bucket_name,
+        link_type,
+        reprocess_assets,
+        asset_handler,
+        hucs_gdf,
+        country_boundaries,
+        skip_owp_qc=skip_owp_qc,
+    )
+    return (item, sent_ti_path, asset_results)
+
+
 def main():
     args = parse_arguments()
     s3_utils = initialize_s3_utils(profile=args.profile)
@@ -464,20 +515,51 @@ def main():
         local_hucs_path = f"{tmpdir}/{hucs_gpkg}"
         s3_utils.s3_client.download_file(args.bucket_name, args.hucs_object_key, local_hucs_path)
         hucs_gdf = gpd.read_file(local_hucs_path)
-        for date in dates:
-            print(f"===============processing {date}===============")
-            process_date(
-                date,
-                s3_utils,
-                args.bucket_name,
-                args.link_type,
-                collection,
-                args.reprocess_assets,
-                asset_handler,
-                hucs_gdf,
-                country_boundaries,
+
+        if args.workers <= 1:
+            for date in dates:
+                print(f"===============processing {date}===============")
+                process_date(
+                    date,
+                    s3_utils,
+                    args.bucket_name,
+                    args.link_type,
+                    collection,
+                    args.reprocess_assets,
+                    asset_handler,
+                    hucs_gdf,
+                    country_boundaries,
+                    skip_owp_qc=args.skip_owp_qc,
+                )
+        else:
+            work_items = []
+            for date_path in dates:
+                date_id = date_path.strip("/").split("/")[-1]
+                sent_ti_list = s3_utils.list_subdirectories(args.bucket_name, date_path)
+                for sent_ti_path in sent_ti_list:
+                    work_items.append((date_path, date_id, sent_ti_path))
+            worker = partial(
+                _process_one_scene,
+                profile=args.profile,
+                bucket_name=args.bucket_name,
+                link_type=args.link_type,
+                reprocess_assets=args.reprocess_assets,
                 skip_owp_qc=args.skip_owp_qc,
+                hucs_gdf=hucs_gdf,
+                country_boundaries=country_boundaries,
+                derived_metadata_path=args.derived_metadata_path,
+                initial_results_df=asset_handler.results_df,
             )
+            with multiprocessing.Pool(args.workers) as pool:
+                for result in pool.imap_unordered(worker, work_items):
+                    item, sent_ti_path, asset_results = result
+                    if item is not None and asset_results is not None:
+                        collection.add_item(item)
+                        asset_handler.merge_single_result(sent_ti_path, asset_results)
+
+    # When using workers, main only merged into results_df; write to parquet before upload
+    if args.workers > 1:
+        asset_handler.results_df.to_parquet(asset_handler.local_results_file, index=False)
     s3_utils.update_collection(collection, "gfm-exp-collection", args.catalog_path, args.bucket_name)
     collection.validate()
 
@@ -486,6 +568,7 @@ def main():
 
 if __name__ == "__main__":
     start_time = time.time()
+    multiprocessing.set_start_method("spawn", force=True)
     main()
     end_time = time.time()
     elapsed_time = end_time - start_time
