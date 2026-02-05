@@ -1,3 +1,4 @@
+import time
 import argparse
 import json
 import logging
@@ -20,13 +21,18 @@ from shapely.geometry import shape
 
 from ingest.gfm.gfm_stac import AssetUtils, GFMInfo, SentinelName
 from ingest.gfm_exp.gfm_exp_handle_assets import GFMExpAssetHandler
+from ingest.gfm_exp.gfm_qc import compute_scene_qc
 from ingest.utils import S3Utils
 
 logging.basicConfig(level=logging.INFO)
 
 
-def initialize_s3_utils():
-    s3 = boto3.client("s3")
+def initialize_s3_utils(profile: str | None = None):
+    if profile is not None:
+        session = boto3.Session(profile_name=profile)
+        s3 = session.client("s3")
+    else:
+        s3 = boto3.client("s3")
     s3_utils = S3Utils(s3)
     return s3_utils
 
@@ -63,6 +69,17 @@ def parse_arguments():
         type=str,
         default="benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet",
         help="S3 key for the derived metadata Parquet file created by asset handling code.",
+    )
+    parser.add_argument(
+        "--skip-owp-qc",
+        action="store_true",
+        help="Skip OWP QC grading and HUC-level metrics (faster runs).",
+    )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="AWS profile name for boto3 (e.g. from ~/.aws/credentials).",
     )
     return parser.parse_args()
 
@@ -163,6 +180,7 @@ def process_date(
     asset_handler,
     hucs_gdf,
     country_boundaries,
+    skip_owp_qc=False,
 ):
     date_id = date_path.strip("/").split("/")[-1]
     logging.info(f"Indexing date: {date_id}")
@@ -180,6 +198,7 @@ def process_date(
             asset_handler,
             hucs_gdf,
             country_boundaries,
+            skip_owp_qc=skip_owp_qc,
         )
 
 
@@ -205,6 +224,7 @@ def process_tile(
     asset_handler,
     hucs_gdf=None,
     country_boundaries=None,
+    skip_owp_qc=False,
 ):
     sent_ti = sent_ti_path.strip("/").split("/")[-1]
     equi7tiles_list = [
@@ -246,6 +266,20 @@ def process_tile(
 
     flood_ratios = get_flood_ratios(s3_utils, bucket_name, sent_ti_path)
 
+    owp_properties = {}
+    if not skip_owp_qc and huc8_list and equi7tiles_list and hucs_gdf is not None:
+        try:
+            owp_properties = compute_scene_qc(
+                huc8_list=huc8_list,
+                hucs_gdf=hucs_gdf,
+                sent_ti_path=sent_ti_path,
+                equi7tiles_list=equi7tiles_list,
+                bucket_name=bucket_name,
+                s3_utils=s3_utils,
+            )
+        except Exception as e:
+            logging.warning("OWP QC computation failed for %s: %s", sent_ti, e)
+
     item = create_item(
         date_id,
         sent_ti,
@@ -260,6 +294,7 @@ def process_tile(
         equi7tile_areas,
         flood_ratios,
         huc8_list=huc8_list,
+        owp_properties=owp_properties,
     )
 
     SatExtension.ext(item, add_if_missing=True)
@@ -307,6 +342,7 @@ def create_item(
     equi7tile_areas,
     flood_ratios,
     huc8_list,
+    owp_properties=None,
 ):
     properties = {
         "title": f"GFM-expanded_{sent_ti}",
@@ -322,6 +358,8 @@ def create_item(
         "tile_total_inundated_area (m^2)": equi7tile_areas,
         "flood_to_baseline_ratios": flood_ratios,
     }
+    if owp_properties:
+        properties.update(owp_properties)
 
     if orbit_state is not None:
         properties["sat:orbit_state"] = orbit_state
@@ -399,7 +437,7 @@ def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfi
 
 def main():
     args = parse_arguments()
-    s3_utils = initialize_s3_utils()
+    s3_utils = initialize_s3_utils(profile=args.profile)
     collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
@@ -427,6 +465,7 @@ def main():
                 asset_handler,
                 hucs_gdf,
                 country_boundaries,
+                skip_owp_qc=args.skip_owp_qc,
             )
     s3_utils.update_collection(collection, "gfm-exp-collection", args.catalog_path, args.bucket_name)
     collection.validate()
@@ -435,4 +474,10 @@ def main():
 
 
 if __name__ == "__main__":
+    start_time = time.time()
     main()
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    hours, rem = divmod(elapsed_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    logging.info(f"Total execution time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
