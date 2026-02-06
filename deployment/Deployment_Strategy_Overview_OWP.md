@@ -129,6 +129,51 @@ Access Layer:
 - Lifecycle policies for automatic cost optimization
 - GDAL caching (1GB) provides good performance
 
+### **Proposed re-structuring of current S3 paths (example):**
+```
+  s3://owp-benchmark/
+  ├── stac/                                    # STAC metadata (22,845 files, ~200MB)
+  │   ├── catalog.json                         # Root catalog
+  │   ├── collections/
+  │   │   ├── gfm-collection/
+  │   │   │   ├── collection.json
+  │   │   │   └── items/
+  │   │   │       ├── gfm-dfo-4336-20160307/
+  │   │   │       │   └── gfm-dfo-4336-20160307.json
+  │   │   │       └── ...
+  │   │   ├── gfm-expanded-collection/
+  │   │   ├── iceye-collection/
+  │   │   ├── ripple-fim-collection/
+  │   │   ├── ble-collection/
+  │   │   ├── hwm-collection/
+  │   │   └── usgs-fim-collection/
+  │   └── assets/
+  │       ├── WBDHU8_webproj.gpkg              # Shared HUC8 boundaries
+  │       └── derived-asset-data/              # Parquet caches
+  │           ├── gfm_collection.parquet
+  │           ├── gfm_expanded_collection.parquet
+  │           └── ...
+  │
+  ├── data/                                    # Geospatial assets (1.5 TB)
+  │   ├── gfm/                                 # GFM flood products
+  │   │   ├── dfo-4336/
+  │   │   │   └── S1A_IW_GRDH_[...]/
+  │   │   │       ├── *_ENSEMBLE_FLOOD_*.tif
+  │   │   │       ├── *_ENSEMBLE_UNCERTAINTY_*.tif
+  │   │   │       ├── *_ADVFLAG_*.tif
+  │   │   │       └── ...
+  │   │   └── ...
+  │   ├── iceye/                               # ICEYE satellite imagery
+  │   │   └── ICEYE_FSD-[...]/
+  │   ├── ble/                                 # BLE validation data
+  │   ├── ripple/                              # RIPPLE FIM
+  │   ├── hwm/                                 # High water marks
+  │   └── usgs/                                # USGS FIM
+  │
+  └── docs/                                    # Documentation
+      ├── gfm_data_readme.pdf
+      └── collection_metadata/
+```
 ---
 
 ## Implementation Plan
