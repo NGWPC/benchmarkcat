@@ -541,5 +541,6 @@ def _empty_owp_properties() -> Dict[str, Any]:
 #   --asset_object_key scratch/biplov.bhandari/gfm-stac-test/data-gfm-exp/ \
 #   --hucs_object_key benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg \
 #   --derived_metadata_path scratch/biplov.bhandari/gfm-stac-test/stac/assets/derived-asset-data/gfm_expanded_collection.parquet \
+#   --workers  6 \
 #   --profile Data \
 #   --skip-owp-qc

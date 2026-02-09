@@ -243,13 +243,13 @@ class GFMExpAssetHandler:
         self.results_df = self.results_df[~self.results_df["sent_ti_path"].isin(new_df["sent_ti_path"])]
         self.results_df = pd.concat([self.results_df, new_df], ignore_index=True)
 
-    def upload_modified_parquet(self):
+    def upload_modified_parquet(self, remove_local=True):
         try:
             self.s3_utils.s3_client.upload_file(self.local_results_file, self.bucket_name, self.derived_metadata_path)
             logging.info(f"Successfully uploaded {self.local_results_file}")
         except Exception as e:
             logging.error(f"Failed to upload {self.local_results_file}: {e}")
         finally:
-            if os.path.exists(self.local_results_file):
+            if remove_local and os.path.exists(self.local_results_file):
                 os.remove(self.local_results_file)
                 logging.info(f"Removed local file {self.local_results_file}")

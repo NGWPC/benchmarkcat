@@ -87,6 +87,30 @@ def parse_arguments():
         default=1,
         help="Number of parallel workers for scene processing; 1 = sequential.",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=50_000,
+        help="Number of items per batch before writing item JSONs to S3 and adding item links; 0 = all in memory.",
+    )
+    parser.add_argument(
+        "--parquet-checkpoint-every",
+        type=int,
+        default=50_000,
+        help="Write and upload parquet every N merged scenes (0 = only at end).",
+    )
+    parser.add_argument(
+        "--after-date",
+        type=str,
+        default=None,
+        help="Process only dates >= this (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--dates",
+        type=str,
+        default=None,
+        help="Comma-separated list of dates to process (e.g. 2024-01-01,2024-01-15).",
+    )
     return parser.parse_args()
 
 
@@ -176,6 +200,60 @@ def get_gfm_exp_dates(s3_utils, bucket_name, asset_object_key):
     return s3_utils.list_subdirectories(bucket_name, asset_object_key)
 
 
+def _date_id_from_path(date_path):
+    """Extract date id (YYYY-MM-DD) from date path for filtering."""
+    return date_path.strip("/").split("/")[-1]
+
+
+def filter_dates_by_scope(dates, after_date=None, dates_list=None):
+    """Filter dates by --after-date and --dates. Apply after_date first, then dates_list."""
+    if after_date is not None:
+        dates = [d for d in dates if _date_id_from_path(d) >= after_date]
+    if dates_list is not None:
+        allowed = set(s.strip() for s in dates_list.split(",") if s.strip())
+        dates = [d for d in dates if _date_id_from_path(d) in allowed]
+    return dates
+
+
+def item_id_from_sent_ti_path(sent_ti_path: str) -> str:
+    """Derive STAC item id from sent_ti_path (matches create_item)."""
+    sent_ti = sent_ti_path.strip("/").split("/")[-1]
+    return f"GFM-expanded_{sent_ti}"
+
+
+def scene_already_uploaded(sent_ti_path, results_df, s3_utils, bucket_name, catalog_path, catalog_id) -> bool:
+    """True if scene row is in parquet and item JSON exists on S3 (fully committed)."""
+    if sent_ti_path not in results_df["sent_ti_path"].values:
+        return False
+    item_id = item_id_from_sent_ti_path(sent_ti_path)
+    base = catalog_path.rstrip("/") + "/" + catalog_id.strip("/")
+    key = f"{base}/items/{item_id}.json"
+    try:
+        s3_utils.s3_client.head_object(Bucket=bucket_name, Key=key)
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "404":
+            return False
+        raise
+
+
+def flush_item_batch(s3_utils, bucket_name, catalog_path, catalog_id, collection, item_buffer):
+    """Upload item JSONs to S3, add item links to collection, clear buffer."""
+    if not item_buffer:
+        return
+    base = catalog_path.rstrip("/") + "/" + catalog_id.strip("/")
+    items_prefix = base + "/items"
+    for item in item_buffer:
+        key = f"{items_prefix}/{item.id}.json"
+        body = json.dumps(item.to_dict(), indent=2)
+        s3_utils.s3_client.put_object(Bucket=bucket_name, Key=key, Body=body, ContentType="application/geo+json")
+        collection.add_item_link(
+            pystac.Link(rel=pystac.RelType.ITEM, href="items/" + item.id + ".json", media_type="application/geo+json")
+        )
+    item_buffer.clear()
+    logging.info(f"Flushed batch of items to S3 (prefix {items_prefix})")
+
+
 def process_date(
     date_path,
     s3_utils,
@@ -187,12 +265,28 @@ def process_date(
     hucs_gdf,
     country_boundaries,
     skip_owp_qc=False,
+    on_scene_done=None,
+    catalog_path=None,
+    catalog_id=None,
 ):
     date_id = date_path.strip("/").split("/")[-1]
     logging.info(f"Indexing date: {date_id}")
 
     sent_ti_list = s3_utils.list_subdirectories(bucket_name, date_path)
     for sent_ti_path in sent_ti_list:
+        if catalog_path is not None and catalog_id is not None and on_scene_done is not None:
+            if scene_already_uploaded(
+                sent_ti_path, asset_handler.results_df, s3_utils, bucket_name, catalog_path, catalog_id
+            ):
+                item_id = item_id_from_sent_ti_path(sent_ti_path)
+                collection.add_item_link(
+                    pystac.Link(
+                        rel=pystac.RelType.ITEM,
+                        href="items/" + item_id + ".json",
+                        media_type="application/geo+json",
+                    )
+                )
+                continue
         item, asset_results = process_tile(
             sent_ti_path,
             date_id,
@@ -206,8 +300,11 @@ def process_date(
             skip_owp_qc=skip_owp_qc,
         )
         if item is not None and asset_results is not None:
-            collection.add_item(item)
-            asset_handler.merge_single_result(sent_ti_path, asset_results)
+            if on_scene_done is not None:
+                on_scene_done(item, sent_ti_path, asset_results)
+            else:
+                collection.add_item(item)
+                asset_handler.merge_single_result(sent_ti_path, asset_results)
 
 
 def get_flood_ratios(s3_utils, bucket_name, sent_ti_path):
@@ -456,6 +553,7 @@ def _process_one_scene(
 ):
     """Top-level worker for parallel scene processing. Creates own s3_utils and asset_handler."""
     date_path, date_id, sent_ti_path = work_item
+    print(f"Processing scene: {sent_ti_path} of date: {date_id}")
     if profile is not None:
         os.environ["AWS_PROFILE"] = profile
     else:
@@ -502,12 +600,44 @@ def main():
 
     collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)
+    dates = filter_dates_by_scope(dates, after_date=args.after_date, dates_list=args.dates)
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
     # Load neighbor country boundaries to filter products completely outside CONUS
     script_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(script_dir)
     gpkg_path = os.path.join(parent_dir, "Mexico_Canada_boundaries.gpkg")
     country_boundaries = get_conus_neighbors(gpkg_path)
+
+    catalog_id = "gfm-exp-collection"
+    item_buffer = []
+    items_merged = [0]  # mutable so callback can update
+
+    def do_parquet_checkpoint():
+        if args.parquet_checkpoint_every <= 0:
+            return
+        asset_handler.results_df.to_parquet(asset_handler.local_results_file, index=False)
+        asset_handler.s3_utils.s3_client.upload_file(
+            asset_handler.local_results_file,
+            asset_handler.bucket_name,
+            asset_handler.derived_metadata_path,
+        )
+        logging.info(f"Parquet checkpoint: uploaded after {items_merged[0]} scenes")
+
+    def on_scene_done(item, sent_ti_path, asset_results):
+        if args.batch_size <= 0:
+            collection.add_item(item)
+        else:
+            item_buffer.append(item)
+        asset_handler.merge_single_result(sent_ti_path, asset_results)
+        items_merged[0] += 1
+        if (
+            args.parquet_checkpoint_every > 0
+            and items_merged[0] % args.parquet_checkpoint_every == 0
+            and items_merged[0] > 0
+        ):
+            do_parquet_checkpoint()
+        if args.batch_size > 0 and len(item_buffer) >= args.batch_size:
+            flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
 
     # Download and read HUCs data
     _, hucs_gpkg = os.path.split(args.hucs_object_key)
@@ -530,6 +660,9 @@ def main():
                     hucs_gdf,
                     country_boundaries,
                     skip_owp_qc=args.skip_owp_qc,
+                    on_scene_done=on_scene_done,
+                    catalog_path=args.catalog_path if args.batch_size > 0 else None,
+                    catalog_id=catalog_id if args.batch_size > 0 else None,
                 )
         else:
             work_items = []
@@ -538,6 +671,31 @@ def main():
                 sent_ti_list = s3_utils.list_subdirectories(args.bucket_name, date_path)
                 for sent_ti_path in sent_ti_list:
                     work_items.append((date_path, date_id, sent_ti_path))
+            if args.batch_size > 0:
+                work_items_to_process = []
+                for date_path, date_id, sent_ti_path in work_items:
+                    if scene_already_uploaded(
+                        sent_ti_path,
+                        asset_handler.results_df,
+                        s3_utils,
+                        args.bucket_name,
+                        args.catalog_path,
+                        catalog_id,
+                    ):
+                        item_id = item_id_from_sent_ti_path(sent_ti_path)
+                        collection.add_item_link(
+                            pystac.Link(
+                                rel=pystac.RelType.ITEM,
+                                href="items/" + item_id + ".json",
+                                media_type="application/geo+json",
+                            )
+                        )
+                    else:
+                        work_items_to_process.append((date_path, date_id, sent_ti_path))
+                work_items = work_items_to_process
+
+            print(f"Work items to process: {len(work_items)}")
+
             worker = partial(
                 _process_one_scene,
                 profile=args.profile,
@@ -554,16 +712,19 @@ def main():
                 for result in pool.imap_unordered(worker, work_items):
                     item, sent_ti_path, asset_results = result
                     if item is not None and asset_results is not None:
-                        collection.add_item(item)
-                        asset_handler.merge_single_result(sent_ti_path, asset_results)
+                        on_scene_done(item, sent_ti_path, asset_results)
 
-    # When using workers, main only merged into results_df; write to parquet before upload
+    # Flush remaining item buffer
+    if args.batch_size > 0:
+        flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
+
+    # When using workers, main only merged into results_df; write to parquet before final upload
     if args.workers > 1:
         asset_handler.results_df.to_parquet(asset_handler.local_results_file, index=False)
-    s3_utils.update_collection(collection, "gfm-exp-collection", args.catalog_path, args.bucket_name)
+    s3_utils.update_collection(collection, catalog_id, args.catalog_path, args.bucket_name)
     collection.validate()
 
-    asset_handler.upload_modified_parquet()
+    asset_handler.upload_modified_parquet(remove_local=True)
 
 
 if __name__ == "__main__":

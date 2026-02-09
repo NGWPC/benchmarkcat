@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
 import numpy as np
@@ -151,16 +152,34 @@ class S3Utils:
 
         return catalog, catalog_local_path
 
-    def upload_directory_to_s3(self, directory_path, bucket_name, destination_path):
+    def upload_directory_to_s3(self, directory_path, bucket_name, destination_path, max_workers=32):
+        upload_tasks = []
         for root, _, files in os.walk(directory_path):
             for file in files:
                 file_path = os.path.join(root, file)
                 s3_key = os.path.join(destination_path, os.path.relpath(file_path, directory_path))
-                try:
-                    self.s3_client.upload_file(file_path, bucket_name, s3_key)
-                    print(f"Uploaded {file_path} to s3://{bucket_name}/{s3_key}")
-                except (NoCredentialsError, ClientError) as e:
-                    print(f"Failed to upload {file_path} to s3://{bucket_name}/{s3_key}: {e}")
+                upload_tasks.append((file_path, s3_key))
+        total = len(upload_tasks)
+        uploaded = [0]
+        log_every = 10_000
+
+        def upload_one(args):
+            file_path, s3_key = args
+            try:
+                self.s3_client.upload_file(file_path, bucket_name, s3_key)
+                return True
+            except (NoCredentialsError, ClientError) as e:
+                logging.error("Failed to upload %s to s3://%s/%s: %s", file_path, bucket_name, s3_key, e)
+                return False
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(upload_one, task): task for task in upload_tasks}
+            for future in as_completed(futures):
+                if future.result():
+                    uploaded[0] += 1
+                if uploaded[0] % log_every == 0 and uploaded[0] > 0:
+                    logging.info("Uploaded %s / %s files to S3", uploaded[0], total)
+        logging.info("Uploaded %s files to S3", total)
 
     def update_collection(self, collection, catalog_id, catalog_path, bucket_name):
         with tempfile.TemporaryDirectory() as temp_dir:
