@@ -200,7 +200,11 @@ class S3Utils:
                     print(
                         f"Warning: Could not remove existing child '{catalog_id}' (missing file), will replace with new version"
                     )
-                    pass
+                    # Manually remove the stale link to avoid duplicate when add_child is called next
+                    catalog.links = [
+                        link for link in catalog.links
+                        if not (link.rel == pystac.RelType.CHILD and link.target and catalog_id in str(link.target))
+                    ]
                 else:
                     raise
 

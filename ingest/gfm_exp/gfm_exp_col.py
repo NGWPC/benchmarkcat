@@ -247,24 +247,37 @@ def flush_item_batch(s3_utils, bucket_name, catalog_path, catalog_id, collection
         item.set_parent(collection)
         d = item.to_dict()
         d["collection"] = catalog_id
-        links = d.get("links", [])
-        collection_link = next((l for l in links if l.get("rel") == "collection"), None)
-        if collection_link is None:
-            links.append(
-                {
-                    "rel": "collection",
-                    "href": "../collection.json",
-                    "type": "application/json",
-                    "title": "Expanded Global Flood Monitoring Collection",
-                }
-            )
-        elif collection_link.get("href") is None:
-            collection_link["href"] = "../collection.json"
+
+        # Build links to match root, collection, parent
+        links = [
+            {
+                "rel": "root",
+                "href": "../../catalog.json",
+                "type": "application/json",
+                "title": "FIM Benchmark Catalog",
+            },
+            {
+                "rel": "collection",
+                "href": "../collection.json",
+                "type": "application/json",
+                "title": "Expanded Global Flood Monitoring Collection",
+            },
+            {
+                "rel": "parent",
+                "href": "../collection.json",
+                "type": "application/json",
+                "title": "Expanded Global Flood Monitoring Collection",
+            },
+        ]
         d["links"] = links
         body = json.dumps(d, indent=2)
-        s3_utils.s3_client.put_object(Bucket=bucket_name, Key=key, Body=body, ContentType="application/geo+json")
+        s3_utils.s3_client.put_object(Bucket=bucket_name, Key=key, Body=body, ContentType="application/json")
         collection.add_link(
-            pystac.Link(rel=pystac.RelType.ITEM, target=f"{item.id}/{item.id}.json", media_type="application/geo+json")
+            pystac.Link(
+                rel=pystac.RelType.ITEM,
+                target=f"./{item.id}/{item.id}.json",
+                media_type="application/geo+json",
+            )
         )
     item_buffer.clear()
     logging.info(f"Flushed batch of items to S3 (prefix {base})")
@@ -702,7 +715,7 @@ def main():
                         collection.add_link(
                             pystac.Link(
                                 rel=pystac.RelType.ITEM,
-                                target=f"{item_id}/{item_id}.json",
+                                target=f"./{item_id}/{item_id}.json",
                                 media_type="application/geo+json",
                             )
                         )
