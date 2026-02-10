@@ -227,7 +227,7 @@ def scene_already_uploaded(sent_ti_path, results_df, s3_utils, bucket_name, cata
         return False
     item_id = item_id_from_sent_ti_path(sent_ti_path)
     base = catalog_path.rstrip("/") + "/" + catalog_id.strip("/")
-    key = f"{base}/items/{item_id}.json"
+    key = f"{base}/{item_id}/{item_id}.json"
     try:
         s3_utils.s3_client.head_object(Bucket=bucket_name, Key=key)
         return True
@@ -242,16 +242,32 @@ def flush_item_batch(s3_utils, bucket_name, catalog_path, catalog_id, collection
     if not item_buffer:
         return
     base = catalog_path.rstrip("/") + "/" + catalog_id.strip("/")
-    items_prefix = base + "/items"
     for item in item_buffer:
-        key = f"{items_prefix}/{item.id}.json"
-        body = json.dumps(item.to_dict(), indent=2)
+        key = f"{base}/{item.id}/{item.id}.json"
+        item.set_parent(collection)
+        d = item.to_dict()
+        d["collection"] = catalog_id
+        links = d.get("links", [])
+        collection_link = next((l for l in links if l.get("rel") == "collection"), None)
+        if collection_link is None:
+            links.append(
+                {
+                    "rel": "collection",
+                    "href": "../collection.json",
+                    "type": "application/json",
+                    "title": "Expanded Global Flood Monitoring Collection",
+                }
+            )
+        elif collection_link.get("href") is None:
+            collection_link["href"] = "../collection.json"
+        d["links"] = links
+        body = json.dumps(d, indent=2)
         s3_utils.s3_client.put_object(Bucket=bucket_name, Key=key, Body=body, ContentType="application/geo+json")
-        collection.add_item_link(
-            pystac.Link(rel=pystac.RelType.ITEM, href="items/" + item.id + ".json", media_type="application/geo+json")
+        collection.add_link(
+            pystac.Link(rel=pystac.RelType.ITEM, target=f"{item.id}/{item.id}.json", media_type="application/geo+json")
         )
     item_buffer.clear()
-    logging.info(f"Flushed batch of items to S3 (prefix {items_prefix})")
+    logging.info(f"Flushed batch of items to S3 (prefix {base})")
 
 
 def process_date(
@@ -279,10 +295,10 @@ def process_date(
                 sent_ti_path, asset_handler.results_df, s3_utils, bucket_name, catalog_path, catalog_id
             ):
                 item_id = item_id_from_sent_ti_path(sent_ti_path)
-                collection.add_item_link(
+                collection.add_link(
                     pystac.Link(
                         rel=pystac.RelType.ITEM,
-                        href="items/" + item_id + ".json",
+                        target=f"{item_id}/{item_id}.json",
                         media_type="application/geo+json",
                     )
                 )
@@ -608,7 +624,7 @@ def main():
     gpkg_path = os.path.join(parent_dir, "Mexico_Canada_boundaries.gpkg")
     country_boundaries = get_conus_neighbors(gpkg_path)
 
-    catalog_id = "gfm-exp-collection"
+    catalog_id = "gfm-expanded-collection"
     item_buffer = []
     items_merged = [0]  # mutable so callback can update
 
@@ -683,10 +699,10 @@ def main():
                         catalog_id,
                     ):
                         item_id = item_id_from_sent_ti_path(sent_ti_path)
-                        collection.add_item_link(
+                        collection.add_link(
                             pystac.Link(
                                 rel=pystac.RelType.ITEM,
-                                href="items/" + item_id + ".json",
+                                target=f"{item_id}/{item_id}.json",
                                 media_type="application/geo+json",
                             )
                         )
@@ -721,6 +737,12 @@ def main():
     # When using workers, main only merged into results_df; write to parquet before final upload
     if args.workers > 1:
         asset_handler.results_df.to_parquet(asset_handler.local_results_file, index=False)
+
+    # When batch_size <= 0, items were added via collection.add_item; set self href to .json so pystac writes .json files
+    if args.batch_size <= 0:
+        for item in list(collection.get_items()):
+            item.set_self_href(f"{catalog_id}/{item.id}/{item.id}.json")
+
     s3_utils.update_collection(collection, catalog_id, args.catalog_path, args.bucket_name)
     collection.validate()
 

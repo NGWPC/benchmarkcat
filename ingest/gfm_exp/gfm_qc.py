@@ -8,7 +8,6 @@ when HUCs cross tile boundaries.
 """
 
 import logging
-import os
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
@@ -16,8 +15,8 @@ logger = logging.getLogger(__name__)
 import geopandas as gpd
 import numpy as np
 import rasterio
+from rasterio.features import geometry_mask
 from rasterio.merge import merge
-from rasterio.mask import mask
 from shapely import Geometry
 
 REQUIRED_LAYERS = [
@@ -76,40 +75,23 @@ def _resolve_layer_keys(
             )
     return result
 
-def _check_scene_completeness(
-    s3_utils: Any,
-    bucket_name: str,
-    sent_ti_path: str,
-    equi7tiles_list: List[str],
+def _check_scene_completeness_from_keys(
+    all_tile_keys: Dict[str, Dict[str, Optional[str]]],
 ) -> bool:
-    """Check whether at least one tile has all required layer files present and readable.
+    """Check whether at least one tile has all required layer files present.
+
+    Uses pre-resolved keys to avoid redundant S3 API calls. Files are validated
+    when rasterio.open() is called during mosaic building.
 
     Args:
-        s3_utils: S3 utilities object with s3_client.
-        bucket_name: S3 bucket name.
-        sent_ti_path: S3 prefix for the scene.
-        equi7tiles_list: List of equi7tile ids in the scene.
+        all_tile_keys: Dict mapping tile id to {layer: s3_key_or_None}.
 
     Returns:
-        True if at least one tile has all REQUIRED_LAYERS and each key passes head_object.
+        True if at least one tile has all REQUIRED_LAYERS with non-None keys.
     """
-    for equi7tile in equi7tiles_list:
-        keys = _resolve_layer_keys(s3_utils, bucket_name, sent_ti_path, equi7tile)
-        if not all(keys.get(ly) for ly in REQUIRED_LAYERS):
-            continue
-        try:
-            for key in keys.values():
-                if key:
-                    s3_utils.s3_client.head_object(Bucket=bucket_name, Key=key)
+    for tile, keys in all_tile_keys.items():
+        if all(keys.get(ly) for ly in REQUIRED_LAYERS):
             return True
-        except Exception as e:
-            logger.debug(
-                "Scene completeness check failed for tile %s: %s",
-                equi7tile,
-                e,
-                exc_info=False,
-            )
-            continue
     return False
 
 def _get_raster_metadata(file_path: str) -> Optional[Dict[str, Any]]:
@@ -187,7 +169,10 @@ def _mask_mosaic_to_geometry(
     nodata: Optional[Union[int, float]],
     geom: Geometry,
 ) -> Optional[np.ndarray]:
-    """Mask a prebuilt mosaic to one geometry; return first band of masked array.
+    """Mask a prebuilt mosaic to one geometry; return first band with pixels outside geometry set to nodata.
+
+    Uses rasterio.features.geometry_mask() for direct numpy-level masking,
+    avoiding the overhead of writing the full mosaic to a MemoryFile per HUC.
 
     Args:
         mosaic: Mosaic array (count, height, width).
@@ -201,34 +186,20 @@ def _mask_mosaic_to_geometry(
     """
     work_nodata = nodata if nodata is not None else 255
     try:
-        with rasterio.io.MemoryFile() as memfile:
-            with memfile.open(
-                driver="GTiff",
-                height=mosaic.shape[1],
-                width=mosaic.shape[2],
-                count=mosaic.shape[0],
-                dtype=mosaic.dtype,
-                crs=crs,
-                transform=transform,
-                nodata=work_nodata,
-            ) as dataset:
-                dataset.write(mosaic)
-                try:
-                    out_image, _ = mask(
-                        dataset,
-                        [geom.__geo_interface__],
-                        crop=True,
-                        filled=True,
-                    )
-                    return out_image[0]
-                except ValueError as e:
-                    logger.debug(
-                        "Mask failed (geometry may not overlap mosaic): %s",
-                        e,
-                    )
-                    return None
-    except (rasterio.RasterioIOError, OSError, MemoryError) as e:
-        logger.warning("Error masking mosaic to geometry: %s", e)
+        # geometry_mask returns True where pixels are OUTSIDE the geometry
+        outside_mask = geometry_mask(
+            [geom.__geo_interface__],
+            out_shape=(mosaic.shape[1], mosaic.shape[2]),
+            transform=transform,
+        )
+        # If geometry doesn't overlap mosaic at all, every pixel is outside
+        if outside_mask.all():
+            return None
+        band = mosaic[0].copy()
+        band[outside_mask] = work_nodata
+        return band
+    except (ValueError, MemoryError) as e:
+        logger.debug("Mask failed (geometry may not overlap mosaic): %s", e)
         return None
 
 
@@ -386,9 +357,12 @@ def compute_scene_qc(
         logger.warning("HUC GeoDataFrame has no CRS. Assuming EPSG:4326.")
         hucs_gdf.set_crs("EPSG:4326", inplace=True)
 
-    scene_data_complete = _check_scene_completeness(
-        s3_utils, bucket_name, sent_ti_path, equi7tiles_list
-    )
+    # Resolve S3 keys once per tile (avoids duplicate ListObjects calls)
+    all_tile_keys = {}
+    for tile in equi7tiles_list:
+        all_tile_keys[tile] = _resolve_layer_keys(s3_utils, bucket_name, sent_ti_path, tile)
+
+    scene_data_complete = _check_scene_completeness_from_keys(all_tile_keys)
 
     huc_summaries = []
     total_flood_area_km2 = 0.0
@@ -399,11 +373,10 @@ def compute_scene_qc(
     scene_highest_impact = "Low"
     active_hucs = []
 
-    # Build S3 URIs once (scene-level)
+    # Build S3 URIs from pre-resolved keys
     local_paths = {ly: {} for ly in REQUIRED_LAYERS}
     metadata = None
-    for tile in equi7tiles_list:
-        keys = _resolve_layer_keys(s3_utils, bucket_name, sent_ti_path, tile)
+    for tile, keys in all_tile_keys.items():
         if not keys["ENSEMBLE_FLOOD"]:
             continue
         for layer, key in keys.items():
@@ -440,22 +413,20 @@ def compute_scene_qc(
         result = _get_mosaic_only(layer, local_paths[layer], detected_nodata)
         mosaics[layer] = result
 
+    # Pre-index HUC8 geometries to avoid repeated DataFrame scans
+    huc8_str_col = hucs_gdf["HUC8"].astype(str)
+    huc_geometry_lookup = {}
+    for huc8_id in huc8_list:
+        rows = hucs_gdf[huc8_str_col == str(huc8_id)]
+        if not rows.empty:
+            geom = rows.geometry.iloc[0]
+            if geom is not None and not geom.is_empty:
+                huc_geometry_lookup[str(huc8_id)] = geom
+
     # Per-HUC: mask prebuilt mosaics and compute metrics
     for huc8_id in huc8_list:
-        try:
-            row = hucs_gdf[hucs_gdf["HUC8"].astype(str) == str(huc8_id)]
-            if row.empty:
-                continue
-            huc_geom = row.geometry.iloc[0]
-            if huc_geom is None or huc_geom.is_empty:
-                continue
-        except Exception as e:
-            logger.debug(
-                "Skipping HUC %s (lookup or geometry error): %s",
-                huc8_id,
-                e,
-                exc_info=False,
-            )
+        huc_geom = huc_geometry_lookup.get(str(huc8_id))
+        if huc_geom is None:
             continue
 
         try:
