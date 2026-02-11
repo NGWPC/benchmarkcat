@@ -18,13 +18,18 @@ from shapely.geometry import shape
 
 from ingest.gfm.gfm_handle_assets import GFMAssetHandler
 from ingest.gfm.gfm_stac import AssetUtils, GFMInfo, SentinelName
+from ingest.gfm_exp.gfm_qc import compute_scene_qc
 from ingest.utils import S3Utils
 
 logging.basicConfig(level=logging.INFO)
 
 
-def initialize_s3_utils():
-    s3 = boto3.client("s3")
+def initialize_s3_utils(profile=None):
+    if profile is not None:
+        session = boto3.Session(profile_name=profile)
+        s3 = session.client("s3")
+    else:
+        s3 = boto3.client("s3")
     s3_utils = S3Utils(s3)
     return s3_utils
 
@@ -57,6 +62,8 @@ def parse_arguments():
         default="benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet",
         help="S3 key for the derived metadata Parquet file created by asset handling code.",
     )
+    parser.add_argument("--skip-owp-qc", action="store_true", help="Skip OWP QC grading (faster runs).")
+    parser.add_argument("--profile", type=str, default=None, help="AWS profile name for boto3.")
     return parser.parse_args()
 
 
@@ -113,7 +120,7 @@ def get_dfo_events(s3_utils, bucket_name, asset_object_key):
     return s3_utils.list_subdirectories(bucket_name, f"{asset_object_key}gfm/")
 
 
-def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf):
+def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf, skip_owp_qc=False):
     event_id = dfo_path.strip("/").split("/")[-1]
     logging.info(f"Indexing DFO event: {event_id}")
 
@@ -129,11 +136,12 @@ def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reproc
             reprocess_assets,
             asset_handler,
             hucs_gdf,
+            skip_owp_qc=skip_owp_qc,
         )
 
 
 def process_tile(
-    sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf=None
+    sent_ti_path, event_id, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf=None, skip_owp_qc=False
 ):
     sent_ti = sent_ti_path.strip("/").split("/")[-1]
     equi7tiles_list = [
@@ -174,6 +182,20 @@ def process_tile(
         huc_join = gpd.sjoin(flood_gdf, hucs_gdf, how="left", predicate="intersects")
         huc8_list = huc_join["HUC8"].tolist() if "HUC8" in huc_join.columns else []
 
+    owp_properties = {}
+    if not skip_owp_qc and huc8_list and equi7tiles_list and hucs_gdf is not None:
+        try:
+            owp_properties = compute_scene_qc(
+                huc8_list=huc8_list,
+                hucs_gdf=hucs_gdf,
+                sent_ti_path=sent_ti_path,
+                equi7tiles_list=equi7tiles_list,
+                bucket_name=bucket_name,
+                s3_utils=s3_utils,
+            )
+        except Exception as e:
+            logging.warning("OWP QC failed for %s: %s", sent_ti, e)
+
     bbox = asset_results["bbox"]
     flowfile_object = asset_results["flowfile_object"]
     main_cause = asset_results["main_cause"]
@@ -193,6 +215,7 @@ def process_tile(
         flowfile_object,
         huc8_list,
         equi7tile_areas,
+        owp_properties=owp_properties,
     )
 
     # add extensions to item
@@ -237,6 +260,7 @@ def create_item(
     flowfile_object,
     huc8_list,
     equi7tile_areas,
+    owp_properties=None,
 ):
     properties = {
         "title": f"DFO-{event_id}_tile-{sent_ti}",
@@ -259,6 +283,9 @@ def create_item(
         properties["sat:orbit_state"] = orbit_state
     if abs_orbit_num is not None:
         properties["sat:absolute_orbit"] = int(abs_orbit_num)
+
+    if owp_properties:
+        properties.update(owp_properties)
 
     return pystac.Item(
         id=f"DFO-{event_id}_tile-{sent_ti}",
@@ -330,7 +357,7 @@ def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfi
 
 def main():
     args = parse_arguments()
-    s3_utils = initialize_s3_utils()
+    s3_utils = initialize_s3_utils(profile=args.profile)
 
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
@@ -353,6 +380,7 @@ def main():
                 args.reprocess_assets,
                 asset_handler,
                 hucs_gdf,
+                skip_owp_qc=args.skip_owp_qc,
             )
 
     s3_utils.update_collection(collection, "gfm-collection", args.catalog_path, args.bucket_name)
