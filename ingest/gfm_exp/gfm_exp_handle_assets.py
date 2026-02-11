@@ -28,8 +28,7 @@ class GFMExpAssetHandler:
         self.bucket_name = bucket_name
         self.derived_metadata_path = derived_metadata_path
         self.results_file = results_file
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.local_results_file = os.path.join(script_dir, results_file)
+        self.local_results_file = os.path.join(tempfile.gettempdir(), results_file)
         if initial_results_df is not None:
             self.results_df = initial_results_df
         else:

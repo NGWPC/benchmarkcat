@@ -60,6 +60,12 @@ def parse_arguments():
         help="Where to download the gpkg with the huc8 info",
     )
     parser.add_argument(
+        "--boundaries_object_key",
+        type=str,
+        default="benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg",
+        help="S3 key for the Mexico/Canada boundaries GeoPackage",
+    )
+    parser.add_argument(
         "--reprocess_assets",
         action="store_true",
         help="Set to true to reprocess assets using GFMAssetHandler",
@@ -88,16 +94,10 @@ def parse_arguments():
         help="Number of parallel workers for scene processing; 1 = sequential.",
     )
     parser.add_argument(
-        "--batch-size",
+        "--checkpoint-every",
         type=int,
         default=50_000,
-        help="Number of items per batch before writing item JSONs to S3 and adding item links; 0 = all in memory.",
-    )
-    parser.add_argument(
-        "--parquet-checkpoint-every",
-        type=int,
-        default=50_000,
-        help="Write and upload parquet every N merged scenes (0 = only at end).",
+        help="Every N merged scenes, flush item JSONs to S3 and write/upload parquet; 0 = only at end (no intermediate checkpoints).",
     )
     parser.add_argument(
         "--after-date",
@@ -631,18 +631,12 @@ def main():
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)
     dates = filter_dates_by_scope(dates, after_date=args.after_date, dates_list=args.dates)
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
-    # Load neighbor country boundaries to filter products completely outside CONUS
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.dirname(script_dir)
-    gpkg_path = os.path.join(parent_dir, "Mexico_Canada_boundaries.gpkg")
-    country_boundaries = get_conus_neighbors(gpkg_path)
-
     catalog_id = "gfm-expanded-collection"
     item_buffer = []
     items_merged = [0]  # mutable so callback can update
 
     def do_parquet_checkpoint():
-        if args.parquet_checkpoint_every <= 0:
+        if args.checkpoint_every <= 0:
             return
         asset_handler.results_df.to_parquet(asset_handler.local_results_file, index=False)
         asset_handler.s3_utils.s3_client.upload_file(
@@ -653,27 +647,30 @@ def main():
         logging.info(f"Parquet checkpoint: uploaded after {items_merged[0]} scenes")
 
     def on_scene_done(item, sent_ti_path, asset_results):
-        if args.batch_size <= 0:
+        if args.checkpoint_every <= 0:
             collection.add_item(item)
         else:
             item_buffer.append(item)
         asset_handler.merge_single_result(sent_ti_path, asset_results)
         items_merged[0] += 1
         if (
-            args.parquet_checkpoint_every > 0
-            and items_merged[0] % args.parquet_checkpoint_every == 0
+            args.checkpoint_every > 0
+            and items_merged[0] % args.checkpoint_every == 0
             and items_merged[0] > 0
         ):
-            do_parquet_checkpoint()
-        if args.batch_size > 0 and len(item_buffer) >= args.batch_size:
             flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
+            do_parquet_checkpoint()
 
-    # Download and read HUCs data
+    # Download and read HUCs data and country boundaries
     _, hucs_gpkg = os.path.split(args.hucs_object_key)
     with tempfile.TemporaryDirectory() as tmpdir:
         local_hucs_path = f"{tmpdir}/{hucs_gpkg}"
         s3_utils.s3_client.download_file(args.bucket_name, args.hucs_object_key, local_hucs_path)
         hucs_gdf = gpd.read_file(local_hucs_path)
+
+        local_boundaries_path = os.path.join(tmpdir, os.path.basename(args.boundaries_object_key))
+        s3_utils.s3_client.download_file(args.bucket_name, args.boundaries_object_key, local_boundaries_path)
+        country_boundaries = get_conus_neighbors(local_boundaries_path)
 
         if args.workers <= 1:
             for date in dates:
@@ -690,8 +687,8 @@ def main():
                     country_boundaries,
                     skip_owp_qc=args.skip_owp_qc,
                     on_scene_done=on_scene_done,
-                    catalog_path=args.catalog_path if args.batch_size > 0 else None,
-                    catalog_id=catalog_id if args.batch_size > 0 else None,
+                    catalog_path=args.catalog_path if args.checkpoint_every > 0 else None,
+                    catalog_id=catalog_id if args.checkpoint_every > 0 else None,
                 )
         else:
             work_items = []
@@ -700,7 +697,7 @@ def main():
                 sent_ti_list = s3_utils.list_subdirectories(args.bucket_name, date_path)
                 for sent_ti_path in sent_ti_list:
                     work_items.append((date_path, date_id, sent_ti_path))
-            if args.batch_size > 0:
+            if args.checkpoint_every > 0:
                 work_items_to_process = []
                 for date_path, date_id, sent_ti_path in work_items:
                     if scene_already_uploaded(
@@ -744,15 +741,15 @@ def main():
                         on_scene_done(item, sent_ti_path, asset_results)
 
     # Flush remaining item buffer
-    if args.batch_size > 0:
+    if args.checkpoint_every > 0:
         flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
 
     # When using workers, main only merged into results_df; write to parquet before final upload
     if args.workers > 1:
         asset_handler.results_df.to_parquet(asset_handler.local_results_file, index=False)
 
-    # When batch_size <= 0, items were added via collection.add_item; set self href to .json so pystac writes .json files
-    if args.batch_size <= 0:
+    # When checkpoint_every <= 0, items were added via collection.add_item; set self href to .json so pystac writes .json files
+    if args.checkpoint_every <= 0:
         for item in list(collection.get_items()):
             item.set_self_href(f"{catalog_id}/{item.id}/{item.id}.json")
 
