@@ -528,3 +528,29 @@ def _empty_owp_properties() -> Dict[str, Any]:
 #   --workers  6 \
 #   --checkpoint-every 5 \
 #   --skip-owp-qc
+
+# docker run --rm benchmarkcat \
+#   ingest.gfm.gfm_col \
+#   --bucket_name fimc-data \
+#   --catalog_path scratch/biplov.bhandari/gfm-stac-test/stac/ \
+#   --asset_object_key scratch/biplov.bhandari/gfm-stac-test/data-gfm/ \
+#   --hucs_object_key benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg \
+#   --derived_metadata_path scratch/biplov.bhandari/gfm-stac-test/stac/assets/derived-asset-data/gfm_collection.parquet \
+#   --profile Data \
+#   --workers  6 \
+#   --checkpoint-every 5 \
+#   --skip-owp-qc
+
+
+# sudo docker run --rm \
+#   -v "$HOME/.aws:/root/.aws" \
+#   benchmarkcat \
+#   ingest.gfm.gfm_col \
+#   --bucket_name fimc-data \
+#   --catalog_path scratch/biplov.bhandari/gfm-stac-test/stac/ \
+#   --asset_object_key scratch/biplov.bhandari/gfm-stac-test/data-gfm/ \
+#   --hucs_object_key benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg \
+#   --derived_metadata_path scratch/biplov.bhandari/gfm-stac-test/stac/assets/derived-asset-data/gfm_collection.parquet \
+#   --profile Data \
+#   --workers 6 \
+#   --checkpoint-every 5
