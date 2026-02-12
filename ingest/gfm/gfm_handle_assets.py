@@ -20,14 +20,17 @@ class GFMAssetHandler:
     This is a class that exists to create a separation of concerns between metadata and data. Doing this to avoid having to reprocess data that has already been processed when you recreate your collection/collections.
     """
 
-    def __init__(self, s3_utils, bucket_name, derived_metadata_path, results_file="gfm_collection.parquet") -> None:
+    def __init__(self, s3_utils, bucket_name, derived_metadata_path, results_file="gfm_collection.parquet", initial_results_df=None) -> None:
         self.s3_utils = s3_utils
         self.bucket_name = bucket_name
         self.derived_metadata_path = derived_metadata_path
         self.results_file = results_file
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.local_results_file = os.path.join(script_dir, results_file)
-        self.results_df = self.load_results()
+        if initial_results_df is not None:
+            self.results_df = initial_results_df
+        else:
+            self.results_df = self.load_results()
 
     def load_results(self):
         try:
@@ -282,7 +285,26 @@ class GFMAssetHandler:
         dfo_end_datetime = pd.to_datetime(event_row["ended"].values[0]).replace(tzinfo=timezone.utc)
         return dfo_start_datetime, dfo_end_datetime
 
-    def upload_modified_parquet(self):
+    def merge_single_result(self, sent_ti_path: str, asset_results: Dict) -> None:
+        """Merge a single scene's asset_results into results_df (in memory only).
+
+        Used by the main process to accumulate results from workers without writing
+        parquet on every scene. Caller writes parquet at checkpoint or end.
+        """
+        import copy as _copy
+        row_data = {k: v for k, v in _copy.deepcopy(asset_results).items() if k != "sent_ti_path"}
+        results = {sent_ti_path: row_data}
+        for data in results.values():
+            for field in ["flowfile_object", "geometry", "bbox", "equi7tile_areas"]:
+                if field in data and (isinstance(data[field], (dict, list)) or data[field] is None):
+                    data[field] = json.dumps(data[field])
+        new_df = (
+            pd.DataFrame.from_dict(results, orient="index").reset_index().rename(columns={"index": "sent_ti_path"})
+        )
+        self.results_df = self.results_df[~self.results_df["sent_ti_path"].isin(new_df["sent_ti_path"])]
+        self.results_df = pd.concat([self.results_df, new_df], ignore_index=True)
+
+    def upload_modified_parquet(self, remove_local=True):
         try:
             # Upload the local Parquet file back to S3
             self.s3_utils.s3_client.upload_file(self.local_results_file, self.bucket_name, self.derived_metadata_path)
@@ -294,7 +316,6 @@ class GFMAssetHandler:
                 f"Failed to upload {self.local_results_file} to s3://{self.bucket_name}/{self.derived_metadata_path}: {e}"
             )
         finally:
-            # Remove the local Parquet file
-            if os.path.exists(self.local_results_file):
+            if remove_local and os.path.exists(self.local_results_file):
                 os.remove(self.local_results_file)
                 logging.info(f"Removed local file {self.local_results_file}")

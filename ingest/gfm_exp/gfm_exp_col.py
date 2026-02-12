@@ -96,7 +96,7 @@ def parse_arguments():
     parser.add_argument(
         "--checkpoint-every",
         type=int,
-        default=50_000,
+        default=50,
         help="Every N merged scenes, flush item JSONs to S3 and write/upload parquet; 0 = only at end (no intermediate checkpoints).",
     )
     parser.add_argument(
