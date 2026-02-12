@@ -1,0 +1,225 @@
+BenchmarkCat STAC Deployment Guide
+
+OVERVIEW
+========
+Deployment of BenchmarkCat STAC Catalog on AWS for OWP:
+- EC2-based STAC API (Docker Compose: PostgreSQL + pgstac, STAC API, STAC Browser)
+- S3 storage (~1.5 TB geospatial assets + STAC metadata)
+- Cross-account S3 migration from NGWPC to OWP
+
+ARCHITECTURE
+============
+- EC2 Instance: t3.xlarge (4 vCPU, 16 GB RAM)
+- Services: PostgreSQL (5432), STAC API (8082), STAC Browser (8080)
+- Storage: S3 bucket with stac/, data/, docs/ directories
+- Bootstrap: Automated via owp-bootstrap.sh user-data script
+
+
+DEPLOYMENT PHASES
+=================
+
+1. TERRAFORM EXECUTION
+-------------------------------
+Internal NGWPC Testing:
+
+Infrastructure team will provision via Terraform:
+- Security Group (owp-benchmarkcat-sg)
+- IAM Role (owp-benchmarkcat-s3-access)
+- EC2 Key Pair (owp-benchmarkcat-key)
+- EC2 Instance with bootstrap script
+
+Post-Provisioning:
+- Retrieve EC2 public IP from infrastructure team
+- Verify SSH access with provided key pair
+- Monitor bootstrap progress: tail -f /var/log/benchmarkcat/bootstrap.log
+
+Handoff to OWP:
+Initial setup:
+- Iniitialize Terraform (`terraform init`)
+- Review planned infrastructure changes (`terraform plan -out=tfplan`)
+- Apply infrastructure (`terraform apply tfplan`)
+
+Post-Apply:
+- Retrieve EC2 public IP (`terraform output`)
+- Verify SSH access (`ssh -i ~/.ssh/owp-benchmarkcat-key.pem ubuntu@<ec2-ip>`)
+- To Destroy (if required) : `terraform destroy`
+
+If terraform execution is not an option, all required resources and necessary configurations
+can be referenced from terraform code, and provisioned using the AWS console.
+
+2. BOOTSTRAP SCRIPT EXECUTION (Automated - for reference)
+------------------------------
+Script: terraform/user-data/owp-bootstrap.sh
+
+Automated Setup:
+- System packages (Docker, Python, AWS CLI, PostgreSQL client)
+- Directory structure (/opt/benchmarkcat, /var/log/benchmarkcat)
+- Docker Compose stack (database, stac-api, stac-browser)
+- Management scripts (health-check, backup, restart)
+- Systemd service for auto-start
+- Weekly automated backups (cron)
+
+Verification:
+- /opt/benchmarkcat/deployment/health-check.sh
+- curl http://localhost:8082/
+- curl http://localhost:8080/
+
+
+3. S3 MIGRATION (Cross-Account)
+--------------------------------
+Scripts:
+- deployment/s3_migration/migrate_s3.py
+- deployment/s3_migration/run_migration.sh
+
+Prerequisites:
+- IAM migration role provisioned (owp-benchmarkcat-migration-role)
+- NGWPC bucket policy updated for cross-account access
+- OWP account ID provided to NGWPC team
+
+Migration Process:
+1. Dry run preview:
+   python3 migrate_s3.py --source-bucket fimc-data --dest-bucket owp-benchmark-stac --dry-run
+
+2. Execute migration (~8-12 hours):
+   python3 migrate_s3.py --source-bucket fimc-data --dest-bucket owp-benchmark-stac
+
+3. Verify structure:
+   aws s3 ls s3://owp-benchmark-stac/stac/ --recursive | wc -l  # ~22,000 files
+   aws s3 ls s3://owp-benchmark-stac/data/ --recursive | wc -l
+
+Result:
+- s3://owp-benchmark-stac/stac/        (~200 MB metadata)
+- s3://owp-benchmark-stac/data/        (~1.5 TB assets by collection)
+
+
+4. CATALOG LOADING
+------------------
+Script: deployment/scripts/load_catalog.py
+
+Prerequisites:
+- Clone repository: git clone https://github.com/NGWPC/benchmarkcat.git
+- Verify database ready: docker exec benchmarkcat-db pg_isready -U pgstac -d stacdb
+
+Process:
+1. Dry run:
+   python3 load_catalog.py /path/to/catalog --dry-run
+
+2. Load catalog:
+   python3 load_catalog.py /path/to/catalog
+
+3. Verify:
+   docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \
+     "SELECT collection, COUNT(*) FROM pgstac.items GROUP BY collection;"
+
+Success Criteria:
+- Collections load without errors
+- Loading rate > 10 items/second
+- All items accessible via API
+
+
+5. COMPONENT TESTING
+---------------------
+
+TC2.1: Database Health
+- Verify pgstac extension installed
+- Check database connectivity from API container
+
+TC2.2: STAC API Endpoints
+- Test: /, /collections, /search endpoints
+- Verify: HTTP 200 responses, valid GeoJSON, correct S3 HREFs
+
+TC2.3: STAC Browser
+- Access: http://<ec2-ip>:8080
+- Verify: Collections display, items browsable, assets accessible
+
+TC2.4: GDAL VSI S3 Access
+- Test direct S3 asset access via GDAL Virtual File System
+- Verify no authentication errors
+
+Commands:
+  curl http://localhost:8082/collections
+  curl http://localhost:8080/
+  docker ps
+  /opt/benchmarkcat/deployment/health-check.sh
+
+
+6. POST-DEPLOYMENT VERIFICATION
+--------------------------------
+
+Health Checks:
+- /opt/benchmarkcat/deployment/health-check.sh
+- systemctl status benchmarkcat
+- docker ps
+- docker stats
+
+Service Access:
+- STAC API: http://<ec2-ip>:8082
+- STAC Browser: http://<ec2-ip>:8080
+- SSH: ssh -i ~/.ssh/owp-benchmarkcat-key.pem ubuntu@<ec2-ip>
+
+Backup Verification:
+- crontab -l | grep backup-db.sh
+- /opt/benchmarkcat/deployment/backup-db.sh
+- ls -lh /opt/backups/postgres/
+
+
+PRODUCTION READINESS CHECKLIST
+===============================
+
+Infrastructure:
+□ EC2 instance provisioned with correct IAM role
+□ Security groups configured (SSH restricted, ports 8080/8082 accessible)
+□ Elastic IP or DNS configured (optional)
+
+Migration:
+□ S3 migration completed (~1.5 TB transferred)
+□ Catalog structure verified (stac/ and data/ directories)
+□ Asset HREFs updated to new S3 bucket
+
+Application:
+□ Docker Compose stack running (3 containers)
+□ PostgreSQL initialized with pgstac
+□ STAC API responding on port 8082
+□ STAC Browser accessible on port 8080
+
+Testing:
+□ All component tests passed (TC2.1 - TC2.4)
+□ Health check script passes
+□ External access verified
+□ GDAL VSI S3 access confirmed
+
+Operations:
+□ Systemd service enabled for auto-start
+□ Automated backups scheduled and tested
+□ Documentation updated with actual IPs/endpoints
+
+
+ROLLBACK PLAN
+=============
+If deployment fails:
+1. Preserve logs from /var/log/benchmarkcat/
+2. Infrastructure team destroys resources via Terraform
+3. S3 destination bucket cleaned if needed (optional)
+
+
+OPERATIONAL SCRIPTS
+===================
+Health Check:     /opt/benchmarkcat/deployment/health-check.sh
+Restart Services: /opt/benchmarkcat/deployment/restart-services.sh
+Stop Services:    /opt/benchmarkcat/deployment/stop-services.sh
+Start Services:   /opt/benchmarkcat/deployment/start-services.sh
+View Logs:        /opt/benchmarkcat/deployment/view-logs.sh
+Backup Database:  /opt/benchmarkcat/deployment/backup-db.sh
+
+
+REFERENCES
+==========
+Documentation:
+- Deployment Strategy: Deployment_Strategy_Overview_OWP.md
+- S3 Migration: s3_migration/README.md
+- Bootstrap Script: terraform/user-data/owp-bootstrap.sh
+
+External:
+- STAC API: https://github.com/stac-utils/stac-fastapi
+- STAC Browser: https://github.com/radiantearth/stac-browser
+- pgstac: https://github.com/stac-utils/pgstac
