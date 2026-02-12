@@ -1,6 +1,6 @@
 # BenchmarkCat STAC Deployment Strategy for OWP
 
-**Date:** January 22, 2026
+**Date:** February 10, 2026
 **Author:** NGWPC FIMC Team
 **For:** NOAA Office of Water Prediction (OWP)
 
@@ -72,13 +72,13 @@ Access Layer:
 
 ### Option A: Dedicated EC2 Instance (RECOMMENDED)
 
-**Architecture:** Single t3.large EC2 instance running 24/7 with docker-compose stack
+**Architecture:** Single t3.xlarge EC2 instance running 24/7 with docker-compose stack
 
-**Monthly Cost:** ~$125 (EC2 $60 + EBS $8 + S3 $35 + data transfer $10-15 + backups $1-2 + CloudWatch $5-10)
+**Monthly Cost:** ~$185 (EC2 $120 + EBS $8 + S3 $35 + data transfer $10-15 + backups $1-2 + CloudWatch $5-10)
 
 **Pros:**
 - Simple deployment and management
-- 40% cheaper than Fargate
+- ~8% cheaper than Fargate
 - Easy troubleshooting
 - Straightforward PostgreSQL backups
 
