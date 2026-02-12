@@ -1,5 +1,4 @@
 import os
-import pdb
 import json
 from shapely.geometry import shape, MultiPolygon, Polygon, mapping
 from shapely.ops import transform
@@ -9,7 +8,6 @@ import pystac
 from pystac.extensions.item_assets import AssetDefinition
 from typing import List, Tuple, Union
 from pyproj import Transformer
-import geopandas as gpd
 
 class GeoJSONHandler:
     def __init__(self, transformer: Transformer):
@@ -31,7 +29,7 @@ class GeoJSONHandler:
             shapely_geom = shape(geom)
             transformed_geom = transform(self.transformer.transform, shapely_geom)
             geometries.append(transformed_geom)
-        
+
         return geometries
 
     def combine_geometries(self, geometries: List[Union[Polygon, MultiPolygon]]) -> Tuple[dict, List[float]]:
@@ -55,7 +53,7 @@ class SentinelName:
     def extract_datetimes(sentinel_string: str) -> Tuple[datetime, datetime]:
         datetime_pattern = re.compile(r'_(\d{8}T\d{6})_(\d{8}T\d{6})_')
         match = datetime_pattern.search(sentinel_string)
-        
+
         if match:
             start_datetime_str = match.group(1)
             end_datetime_str = match.group(2)
@@ -69,7 +67,7 @@ class SentinelName:
     def extract_orbit_state(filename: str) -> str:
         pattern = re.compile(r'.*?_[VH]{2}_([AD]).*')
         match = pattern.match(filename)
-        
+
         if match:
             return match.group(1)
         else:
@@ -79,7 +77,7 @@ class SentinelName:
     def extract_orbit_number(filename: str) -> str:
         pattern = re.compile(r'.*?_\d{8}T\d{6}_\d{8}T\d{6}_(\d{6})_.*')
         match = pattern.match(filename)
-        
+
         if match:
             return match.group(1)
         else:
@@ -90,7 +88,7 @@ class SentinelName:
         filename = os.path.basename(filepath)
         pattern = re.compile(r'_(V\d+M\d+R\d+)_S1')
         match = pattern.search(filename)
-        
+
         if match:
             return match.group(1)
         else:

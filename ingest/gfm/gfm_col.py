@@ -1,7 +1,6 @@
 import argparse
 import logging
 import os
-import pdb
 import re
 import tempfile
 from datetime import datetime, timezone
@@ -117,7 +116,7 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
 
 
 def get_dfo_events(s3_utils, bucket_name, asset_object_key):
-    return s3_utils.list_subdirectories(bucket_name, f"{asset_object_key}gfm/")
+    return s3_utils.list_subdirectories(bucket_name, f"{asset_object_key}")
 
 
 def process_event(dfo_path, s3_utils, bucket_name, link_type, collection, reprocess_assets, asset_handler, hucs_gdf, skip_owp_qc=False):
@@ -269,7 +268,7 @@ def create_item(
         "gfm_data_take_start_datetime": start_datetime.isoformat(),
         "gfm_data_take_end_datetime": end_datetime.isoformat(),
         "dfo_event_id": event_id,
-        "proj:epsg": 27705,
+        "proj:code": "EPSG:27705",
         "proj:wkt2": "+proj=aeqd +lat_0=52 +lon_0=-97.5 +x_0=8264722.17686 +y_0=4867518.35323 +datum=WGS84 +units=m +no_defs",
         "gsd (m)": 20,
         "gfm_version": gfm_version,
@@ -356,7 +355,16 @@ def create_asset(asset_path, bucket_name, link_type, equi7tile, s3_utils, flowfi
 
 
 def main():
+    os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"
+    os.environ["CPL_VSIL_CURL_CHUNK_SIZE"] = "65536"
+
     args = parse_arguments()
+
+    if getattr(args, 'profile', None):
+        os.environ["AWS_PROFILE"] = args.profile
+    else:
+        os.environ.pop("AWS_PROFILE", None)
+
     s3_utils = initialize_s3_utils(profile=args.profile)
 
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)

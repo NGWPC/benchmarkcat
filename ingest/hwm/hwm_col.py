@@ -1,7 +1,6 @@
 import argparse
 import logging
 import os
-import pdb
 import tempfile
 from datetime import datetime, timezone
 
@@ -12,7 +11,7 @@ import pandas as pd
 import pystac
 from dateutil.parser import parse as parse_date
 from pystac.extensions.projection import ProjectionExtension
-from shapely.geometry import MultiPoint, Point, box, mapping
+from shapely.geometry import MultiPoint
 
 from ingest.hwm.hwm_handle_assets import HWMAssetHandler
 from ingest.hwm.hwm_stac import create_wkt_string, flowfile_dir

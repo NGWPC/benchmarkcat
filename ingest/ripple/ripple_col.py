@@ -1,8 +1,6 @@
 import argparse
 import logging
 import os
-import pdb
-import re
 import tempfile
 from datetime import datetime, timezone
 

@@ -1,8 +1,5 @@
 import argparse
 import logging
-import os
-import pdb
-import re
 from datetime import datetime, timezone
 
 import boto3
@@ -11,8 +8,7 @@ from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.extensions.projection import ProjectionExtension
 
 from ingest.ble.ble_handle_assets import BLEAssetHandler
-from ingest.ble.ble_stac import AssetUtils, BLEInfo, GeoJSONHandler
-from ingest.hec_ras_ext import HECRASExtension
+from ingest.ble.ble_stac import BLEInfo
 from ingest.utils import S3Utils
 
 logging.basicConfig(level=logging.INFO)

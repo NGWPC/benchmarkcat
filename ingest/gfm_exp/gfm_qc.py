@@ -516,3 +516,12 @@ def _empty_owp_properties() -> Dict[str, Any]:
 #   --profile Data \
 #   --checkpoint-every 5 \
 #   --skip-owp-qc
+
+
+# python -m ingest.gfm.gfm_col \
+#   --bucket_name fimc-data \
+#   --catalog_path scratch/biplov.bhandari/gfm-stac-test/stac/ \
+#   --asset_object_key scratch/biplov.bhandari/gfm-stac-test/data-gfm/ \
+#   --hucs_object_key benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg \
+#   --derived_metadata_path scratch/biplov.bhandari/gfm-stac-test/stac/assets/derived-asset-data/gfm_collection.parquet \
+#   --profile Data

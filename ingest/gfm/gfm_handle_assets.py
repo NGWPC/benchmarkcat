@@ -2,14 +2,13 @@ import copy
 import json
 import logging
 import os
-import pdb
+import re
 import tempfile
 from datetime import timezone
 from typing import Dict
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import mapping, shape
 
 from ingest.flows import FlowfileUtils
 from ingest.gfm.gfm_stac import GFMGeometryCreator, GFMInfo
@@ -149,12 +148,26 @@ class GFMAssetHandler:
         # Calculate areas for provided equi7tiles
         equi7tile_areas, wkt2_string = self.calculate_equi7tile_areas(sent_ti_path, equi7tiles_list)
 
-        gfm_geom_creator = GFMGeometryCreator(
-            bucket_name=self.bucket_name, s3_client=self.s3_utils.s3_client, gdf_geom=gdf_geom
-        )
-        geometry_dict, bbox = gfm_geom_creator.make_item_geom(
-            self.s3_utils.list_resources_with_string(self.bucket_name, sent_ti_path, ["footprint"])[0]
-        )
+        try:
+            footprint_keys = self.s3_utils.list_resources_with_string(self.bucket_name, sent_ti_path, ["footprint"])
+            if footprint_keys:
+                footprint_key = footprint_keys[0]
+            else:
+                geojson_files = self.s3_utils.list_resources_with_string(self.bucket_name, sent_ti_path, [".geojson"])
+                s1_geojson = next((f for f in geojson_files if os.path.basename(f).startswith("S1")), None)
+                if s1_geojson:
+                    footprint_key = s1_geojson
+                else:
+                    raise IndexError("No footprint or S1*.geojson files found")
+
+            gfm_geom_creator = GFMGeometryCreator(
+                bucket_name=self.bucket_name, s3_client=self.s3_utils.s3_client, gdf_geom=gdf_geom
+            )
+            geometry_dict, bbox = gfm_geom_creator.make_item_geom(footprint_key)
+        except (IndexError, Exception) as e:
+            logging.warning(f"No valid geometry file found for {sent_ti_path}. Using null geometry. Error: {str(e)}")
+            geometry_dict = None
+            bbox = None
 
         results[sent_ti_path] = {
             "flowfile_object": flowfile_object,
@@ -173,14 +186,31 @@ class GFMAssetHandler:
         flowfile_key = self.s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ["flows"])
 
         if flowfile_key:
+            flowfile_name = os.path.basename(flowfile_key[0])
+            # gfm_exp: NWM_v2.1_flowfile.csv; gfm: nwm_retrospective_flows_v3.csv
+            version_match = re.search(r"NWM_(v[\d.]+)_flowfile\.csv", flowfile_name)
+            if not version_match:
+                version_match = re.search(r"flows_(v[\d.]+)\.csv", flowfile_name, re.IGNORECASE)
+
+            if version_match:
+                version_string = version_match.group(1)
+                flowfile_ids = [f"NWM_{version_string}_flowfile"]
+                modified_columns = [copy.deepcopy(GFMInfo.columns_list[0])]
+                modified_columns[0]["feature_id"]["Column data source"] = f"NWM {version_string} hydrofabric"
+                modified_columns[0]["discharge"]["Column data source"] = f"NWM {version_string} ANA discharge data"
+            else:
+                logging.warning(f"Could not extract NWM version from filename: {flowfile_name}")
+                flowfile_ids = ["NWM_unknown_version_flowfile"]
+                modified_columns = [copy.deepcopy(GFMInfo.columns_list[0])]
+                modified_columns[0]["feature_id"]["Column data source"] = "NWM unknown version hydrofabric"
+                modified_columns[0]["discharge"]["Column data source"] = "NWM unknown version ANA discharge data"
+
             flowfile_df = FlowfileUtils.download_flowfiles(bucket_name, flowfile_key, self.s3_utils.s3_client)
             flowstats = FlowfileUtils.extract_flowstats(flowfile_df)
-            flowfile_ids = ["NWM_v3_flowfile"]
-            return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, GFMInfo.columns_list), flowfile_key
+            return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, modified_columns), flowfile_key
         else:
             logging.warning("No flowfile detected")
-            flowfile_key = None
-            return None, flowfile_key
+            return None, None
 
     def create_and_add_thumbnail(self, s3_utils, bucket_name, sent_ti_path):
         extent_paths = s3_utils.list_resources_with_string(bucket_name, sent_ti_path, ["OBSWATER"])
@@ -189,6 +219,10 @@ class GFMAssetHandler:
             for filename in extent_paths
             if len(os.path.basename(filename).split("_")) > 2
         ]
+
+        if not equi7tiles_list:
+            return None
+
         equi7tile = equi7tiles_list[0]
 
         with tempfile.TemporaryDirectory() as tmpdir:

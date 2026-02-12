@@ -2,13 +2,11 @@ import copy
 import json
 import logging
 import os
-import pdb
 import re
 import tempfile
 from typing import Dict
 
 import pandas as pd
-from shapely.geometry import mapping, shape
 
 from ingest.flows import FlowfileUtils
 from ingest.gfm.gfm_stac import GFMGeometryCreator, GFMInfo
@@ -159,7 +157,7 @@ class GFMExpAssetHandler:
                 flowfile_ids = [f"NWM_{version_string}_flowfile"]
 
                 # Create a deep copy of the columns list to modify
-                modified_columns = [{k: v.copy() for k, v in GFMInfo.columns_list[0].items()}]
+                modified_columns = [copy.deepcopy(GFMInfo.columns_list[0])]
 
                 # Update the column data sources with correct version
                 modified_columns[0]["feature_id"]["Column data source"] = f"NWM {version_string} hydrofabric"
@@ -170,9 +168,9 @@ class GFMExpAssetHandler:
                 return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, modified_columns), flowfile_key
             else:
                 logging.warning(f"Could not extract NWM version from filename: {flowfile_name}")
-                modified_columns = [{k: v.copy() for k, v in GFMInfo.columns_list[0].items()}]
+                modified_columns = [copy.deepcopy(GFMInfo.columns_list[0])]
                 modified_columns[0]["feature_id"]["Column data source"] = "NWM unknown version hydrofabric"
-                modified_columns[0]["discharge"]["Column data source"] = "NWM unkown version ANA discharge data"
+                modified_columns[0]["discharge"]["Column data source"] = "NWM unknown version ANA discharge data"
 
                 flowfile_df = FlowfileUtils.download_flowfiles(bucket_name, flowfile_key, self.s3_utils.s3_client)
                 flowstats = FlowfileUtils.extract_flowstats(flowfile_df)

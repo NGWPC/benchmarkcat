@@ -2,16 +2,14 @@ import copy
 import json
 import logging
 import os
-import pdb
 import tempfile
 from typing import Any, Dict, List
 
 import pandas as pd
-from shapely.geometry import shape
 
 from ingest.ble.ble_stac import BLEInfo, GeoJSONHandler
 from ingest.flows import FlowfileUtils
-from ingest.utils import RasterUtils, S3Utils
+from ingest.utils import RasterUtils
 
 
 class BLEAssetHandler:

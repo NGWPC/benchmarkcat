@@ -3,38 +3,37 @@ import logging
 from datetime import datetime
 import boto3
 from botocore.exceptions import ClientError
-from pystac import Catalog, Collection, Item, Asset, CatalogType
+from pystac import Catalog, Collection, Item, CatalogType
 from urllib.parse import urlparse, urljoin
 import dask
 from dask.delayed import delayed
 from dask.distributed import Client, LocalCluster
-import pdb
 
 class STACProcessor:
     def __init__(self, base_url="http://0.0.0.0:8000/", log_dir="logs", skip_existing=False):
         self.base_url = base_url.rstrip('/') + '/'  # Ensure base_url ends with /
         self.skip_existing = skip_existing
         self.setup_logging(log_dir)
-        
+
     def setup_logging(self, log_dir):
         os.makedirs(log_dir, exist_ok=True)
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
-        
+
         # Remove existing handlers
         for handler in self.logger.handlers[:]:
             self.logger.removeHandler(handler)
-            
+
         # Create timestamp for log file
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            
+
         # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
         console_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         console_handler.setFormatter(console_format)
         self.logger.addHandler(console_handler)
-        
+
         # Single file handler for all log levels
         log_file = os.path.join(log_dir, f'stac_processor_log_{timestamp}.log')
         file_handler = logging.FileHandler(log_file)
@@ -50,10 +49,10 @@ class STACProcessor:
         parsed_uri = urlparse(s3_uri)
         bucket = parsed_uri.netloc
         key = parsed_uri.path.lstrip('/')
-        
+
         s3 = boto3.client('s3')
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        
+
         try:
             s3.download_file(bucket, key, local_path)
             return True
@@ -79,14 +78,14 @@ class STACProcessor:
             rel_dir = os.path.relpath(os.path.dirname(parent_href), output_dir)
             asset_filename = os.path.basename(asset.href)
             final_path = os.path.join(output_dir, rel_dir, asset_filename)
-            
+
             # If the file exists and we're skipping existing files, just update the href
             if self.skip_existing and os.path.exists(final_path):
                 # Get path relative to output directory to include collection name
                 rel_path = self.get_relative_to_root(final_path, output_dir)
                 asset.href = urljoin(self.base_url, rel_path)
                 return True
-            
+
             # Download the asset directly to its final location
             if self.download_s3_file(asset.href, final_path):
                 # Get path relative to output directory to include collection name
@@ -101,7 +100,7 @@ class STACProcessor:
         for asset_key, asset in stac_object.assets.items():
             if not self.process_asset(stac_object.get_self_href(), asset_key, asset, output_dir):
                 assets_to_remove.append(asset_key)
-        
+
         for asset_key in assets_to_remove:
             del stac_object.assets[asset_key]
             self.logger.warning(f"Removed asset {asset_key} from {stac_object.__class__.__name__} {stac_object.id}")
@@ -110,16 +109,16 @@ class STACProcessor:
         """Process a single item using minimal data"""
         # Reconstruct item from dictionary
         item = Item.from_dict(item_dict)
-        
+
         assets_to_remove = []
         for asset_key, asset in item.assets.items():
             if not self.process_asset(item.get_self_href(), asset_key, asset, output_dir):
                 assets_to_remove.append(asset_key)
-        
+
         for asset_key in assets_to_remove:
             del item.assets[asset_key]
             self.logger.warning(f"Removed asset {asset_key} from Item {item.id}")
-        
+
         return item.to_dict()
 
     @delayed
@@ -134,20 +133,20 @@ class STACProcessor:
         # Process items in chunks
         all_items = list(catalog.get_items(recursive=True))
         chunk_size = 100
-        
+
         for i in range(0, len(all_items), chunk_size):
             chunk = all_items[i:i + chunk_size]
             self.logger.info(f"Processing chunk {i//chunk_size + 1} of {(len(all_items)-1)//chunk_size + 1}")
-            
+
             # Convert items to dictionaries to reduce graph size
             delayed_items = [
                 self.process_item_delayed(item.to_dict(), output_dir)
                 for item in chunk
             ]
-            
+
             # Process chunk and wait for completion
             processed_items = dask.compute(*delayed_items)
-            
+
             # Update the items in the catalog
             for orig_item, processed_dict in zip(chunk, processed_items):
                 # Update the original item with processed data
@@ -193,19 +192,19 @@ def main():
         # Load and process the catalog
         catalog = Catalog.from_file(catalog_path)
         processor.process_catalog(catalog, args.output_dir)
-        
+
         # Save the final catalog
         catalog.normalize_and_save(
             root_href=args.output_dir,
             catalog_type=CatalogType.SELF_CONTAINED
         )
-        
+
         processor.logger.info("Catalog processing complete")
-        
+
     finally:
         # Clean up Dask resources
         client.close()
         cluster.close()
 
 if __name__ == "__main__":
-    main()  
+    main()
