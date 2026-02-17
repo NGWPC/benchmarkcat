@@ -111,6 +111,37 @@ def parse_arguments():
         default=None,
         help="Comma-separated list of dates to process (e.g. 2024-01-01,2024-01-15).",
     )
+    # Batch-worker mode args
+    parser.add_argument(
+        "--mode",
+        choices=["local", "batch-worker"],
+        default="local",
+        help="'local' = normal run; 'batch-worker' = read manifest slice, write partial parquet.",
+    )
+    parser.add_argument(
+        "--manifest-s3-key",
+        type=str,
+        default=None,
+        help="S3 key of manifest JSONL produced by batch_split.py (required in batch-worker mode).",
+    )
+    parser.add_argument(
+        "--job-index",
+        type=int,
+        default=None,
+        help="Array job index; defaults to AWS_BATCH_JOB_ARRAY_INDEX env var, then 0.",
+    )
+    parser.add_argument(
+        "--scenes-per-job",
+        type=int,
+        default=50,
+        help="Number of scenes each batch-worker array child processes.",
+    )
+    parser.add_argument(
+        "--partial-parquet-prefix",
+        type=str,
+        default=None,
+        help="S3 prefix where per-job partial parquets are written (required in batch-worker mode).",
+    )
     return parser.parse_args()
 
 
@@ -179,7 +210,7 @@ def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils
             }
         ),
     )
-    readme_href, is_valid = s3_utils.generate_href(bucket_name, "benchmark/rs/gfm/gfm_data_readme.pdf", link_type)
+    readme_href, is_valid = s3_utils.generate_href(bucket_name, f"{asset_object_key}gfm_data_readme.pdf", link_type)
     if is_valid:
         collection.assets["naming_conventions"] = pystac.Asset(
             href=readme_href,
@@ -613,8 +644,119 @@ def _process_one_scene(
     return (item, sent_ti_path, asset_results)
 
 
+def main_batch_worker(args):
+    """Batch-worker entry point: process one manifest slice, flush item JSONs, write partial parquet."""
+    from ingest.batch_utils import read_manifest, upload_partial_parquet
+
+    if not args.manifest_s3_key:
+        raise ValueError("--manifest-s3-key is required in batch-worker mode")
+    if not args.partial_parquet_prefix:
+        raise ValueError("--partial-parquet-prefix is required in batch-worker mode")
+
+    job_index = args.job_index
+    if job_index is None:
+        job_index = int(os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX", "0"))
+
+    if args.profile is not None:
+        os.environ["AWS_PROFILE"] = args.profile
+    else:
+        os.environ.pop("AWS_PROFILE", None)
+    os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"
+    os.environ["CPL_VSIL_CURL_CHUNK_SIZE"] = "65536"
+
+    s3_utils = initialize_s3_utils(profile=args.profile)
+
+    all_scenes = read_manifest(s3_utils, args.bucket_name, args.manifest_s3_key)
+    start = job_index * args.scenes_per_job
+    my_scenes = all_scenes[start: start + args.scenes_per_job]
+
+    if not my_scenes:
+        logging.info("Batch worker %d: no scenes in slice — exiting", job_index)
+        return
+
+    logging.info("Batch worker %d: processing %d scenes (indices %d–%d)",
+                 job_index, len(my_scenes), start, start + len(my_scenes) - 1)
+
+    asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
+    catalog_id = "gfm-expanded-collection"
+    collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    item_buffer = []
+
+    _, hucs_gpkg = os.path.split(args.hucs_object_key)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_hucs_path = os.path.join(tmpdir, hucs_gpkg)
+        s3_utils.s3_client.download_file(args.bucket_name, args.hucs_object_key, local_hucs_path)
+        hucs_gdf = gpd.read_file(local_hucs_path)
+
+        local_boundaries_path = os.path.join(tmpdir, os.path.basename(args.boundaries_object_key))
+        s3_utils.s3_client.download_file(args.bucket_name, args.boundaries_object_key, local_boundaries_path)
+        country_boundaries = get_conus_neighbors(local_boundaries_path)
+
+        work_items = [(s["date_path"], s["date_id"], s["sent_ti_path"]) for s in my_scenes]
+
+        if args.workers <= 1:
+            for scene in my_scenes:
+                date_id = scene["date_id"]
+                sent_ti_path = scene["sent_ti_path"]
+                try:
+                    item, asset_results = process_tile(
+                        sent_ti_path,
+                        date_id,
+                        s3_utils,
+                        args.bucket_name,
+                        args.link_type,
+                        args.reprocess_assets,
+                        asset_handler,
+                        hucs_gdf,
+                        country_boundaries,
+                        skip_owp_qc=args.skip_owp_qc,
+                    )
+                    if item is not None and asset_results is not None:
+                        item_buffer.append(item)
+                        asset_handler.merge_single_result(sent_ti_path, asset_results)
+                except Exception as e:
+                    logging.warning("Scene %s failed: %s", sent_ti_path, e)
+        else:
+            worker = partial(
+                _process_one_scene,
+                profile=args.profile,
+                bucket_name=args.bucket_name,
+                link_type=args.link_type,
+                reprocess_assets=args.reprocess_assets,
+                skip_owp_qc=args.skip_owp_qc,
+                hucs_gdf=hucs_gdf,
+                country_boundaries=country_boundaries,
+                derived_metadata_path=args.derived_metadata_path,
+                initial_results_df=None,
+            )
+            with multiprocessing.Pool(args.workers) as pool:
+                for result in pool.imap_unordered(worker, work_items):
+                    item, sent_ti_path, asset_results = result
+                    if item is not None and asset_results is not None:
+                        item_buffer.append(item)
+                        asset_handler.merge_single_result(sent_ti_path, asset_results)
+
+    flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
+
+    if not asset_handler.results_df.empty:
+        upload_partial_parquet(
+            s3_utils,
+            args.bucket_name,
+            args.partial_parquet_prefix,
+            job_index,
+            asset_handler.results_df,
+        )
+
+    logging.info("Batch worker %d done.", job_index)
+
+
 def main():
     args = parse_arguments()
+
+    if args.mode == "batch-worker":
+        main_batch_worker(args)
+        return
+
     s3_utils = initialize_s3_utils(profile=args.profile)
     if args.profile is not None:
         os.environ["AWS_PROFILE"] = args.profile

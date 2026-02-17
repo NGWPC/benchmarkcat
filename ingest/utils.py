@@ -216,6 +216,69 @@ class S3Utils:
 
             self.upload_directory_to_s3(temp_dir, bucket_name, catalog_path)
 
+    def update_collection_or_bootstrap(self, collection, catalog_id, catalog_path, bucket_name):
+        """Update collection in catalog, or bootstrap root catalog and collection when missing."""
+        catalog_key = f"{catalog_path.rstrip('/')}/catalog.json"
+        try:
+            self.s3_client.get_object(Bucket=bucket_name, Key=catalog_key)
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "NoSuchKey":
+                raise
+            # Bootstrap: create root catalog and collection
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root_catalog = pystac.Catalog(
+                    id="stac-catalog",
+                    description="STAC catalog",
+                    title="STAC catalog",
+                    catalog_type=pystac.CatalogType.SELF_CONTAINED,
+                )
+                root_catalog.set_root(root_catalog)
+                root_catalog.set_self_href(os.path.join(temp_dir, "catalog.json"))
+                collection.set_self_href(os.path.join(temp_dir, catalog_id, "collection.json"))
+                root_catalog.add_child(collection)
+                root_catalog.normalize_and_save(
+                    root_href=temp_dir,
+                    catalog_type=pystac.CatalogType.SELF_CONTAINED,
+                    skip_unresolved=True,
+                )
+                self.upload_directory_to_s3(temp_dir, bucket_name, catalog_path)
+            return
+
+        # Catalog exists: same logic as update_collection
+        with tempfile.TemporaryDirectory() as temp_dir:
+            catalog, catalog_local_path = self.download_catalog_and_collections(
+                catalog_key, bucket_name, temp_dir
+            )
+            catalog.set_root(catalog)
+            catalog.set_self_href(catalog_local_path)
+            try:
+                catalog.remove_child(catalog_id)
+            except (KeyError, Exception) as e:
+                if "KeyError" in str(type(e).__name__):
+                    pass
+                elif "does not resolve to a STAC object" in str(e) or "No such file or directory" in str(e):
+                    print(
+                        f"Warning: Could not remove existing child '{catalog_id}' (missing file), will replace with new version"
+                    )
+                    catalog.links = [
+                        link
+                        for link in catalog.links
+                        if not (
+                            link.rel == pystac.RelType.CHILD
+                            and link.target
+                            and catalog_id in str(link.target)
+                        )
+                    ]
+                else:
+                    raise
+            catalog.add_child(collection)
+            catalog.normalize_and_save(
+                root_href=temp_dir,
+                catalog_type=pystac.CatalogType.SELF_CONTAINED,
+                skip_unresolved=True,
+            )
+            self.upload_directory_to_s3(temp_dir, bucket_name, catalog_path)
+
     def generate_href(self, bucket_name, path, link_type, expiration=7 * 24 * 60 * 60):
         try:
             if link_type == "url":
