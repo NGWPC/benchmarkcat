@@ -679,13 +679,6 @@ def main_batch_worker(args):
         country_boundaries = get_conus_neighbors(local_boundaries_path)
 
         work_items = [(s["dfo_path"], s["event_id"], s["sent_ti_path"]) for s in my_scenes]
-        work_items = filter_scenes_by_date_scope(
-            work_items,
-            after_date=args.after_date,
-            before_date=args.before_date,
-            dates_list=args.dates,
-        )
-        my_scenes = [{"dfo_path": d, "event_id": e, "sent_ti_path": s} for d, e, s in work_items]
 
         if args.workers <= 1:
             for scene in my_scenes:

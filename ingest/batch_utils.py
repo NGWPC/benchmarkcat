@@ -10,7 +10,7 @@ import logging
 import os
 import tempfile
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import pystac
@@ -36,10 +36,12 @@ def write_manifest(
     bucket_name: str,
     manifest_key: str,
     scenes: List[Dict],
+    meta_extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write scenes as JSONL to S3 and upload a sidecar metadata JSON.
 
-    Sidecar is written to ``<manifest_key>.meta.json``.
+    Sidecar is written to ``<manifest_key>.meta.json``. Optional ``meta_extra``
+    is merged into the sidecar (e.g. date filter args: after_date, before_date, dates).
     """
     body = "\n".join(json.dumps(s) for s in scenes)
     s3_utils.s3_client.put_object(
@@ -55,6 +57,8 @@ def write_manifest(
         "manifest_s3_key": f"s3://{bucket_name}/{manifest_key}",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if meta_extra:
+        meta.update(meta_extra)
     meta_key = manifest_key + ".meta.json"
     s3_utils.s3_client.put_object(
         Bucket=bucket_name,

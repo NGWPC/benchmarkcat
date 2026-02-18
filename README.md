@@ -186,6 +186,8 @@ docker run --rm \
 
 GFM and GFM expanded support a 3-phase batch workflow for scaling to many scenes. For local testing, run Phase 1, then Phase 2 (e.g. with `--job-index 0`), then Phase 3. All examples below use placeholder S3 paths under `benchmark/stac-bench-cat/` and `benchmark/rs/`; replace with your bucket and paths as needed.
 
+Date filters (`--after-date`, `--before-date`, `--dates`) are applied **only at Phase 1 (batch_split)**. Phase 2 workers process their slice of the manifest as-is and do not re-apply date filters; this avoids double filtering. When Phase 1 uses date filters, a **sidecar metadata file** is written at `<manifest_s3_key>.meta.json` with `total_scenes`, `manifest_s3_key`, `created_at`, and when applicable `after_date`, `before_date`, and/or `dates` so you can see what filters were used when the manifest was built.
+
 #### GFM batch
 
 **Phase 1 — Split** (discover DFO events, write manifest to S3; optional `--after-date`, `--before-date`, `--dates` to limit manifest to scenes in that date range by acquisition date):

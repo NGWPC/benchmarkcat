@@ -95,7 +95,20 @@ def main():
 
     logging.info("Total scenes: %d", len(scenes))
 
-    write_manifest(s3_utils, args.bucket_name, args.manifest_s3_key, scenes)
+    meta_extra = {}
+    if args.after_date is not None:
+        meta_extra["after_date"] = args.after_date
+    if args.before_date is not None:
+        meta_extra["before_date"] = args.before_date
+    if args.dates is not None:
+        meta_extra["dates"] = args.dates
+    write_manifest(
+        s3_utils,
+        args.bucket_name,
+        args.manifest_s3_key,
+        scenes,
+        meta_extra=meta_extra if meta_extra else None,
+    )
     logging.info("Manifest written to s3://%s/%s", args.bucket_name, args.manifest_s3_key)
 
 
