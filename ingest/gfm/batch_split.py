@@ -11,6 +11,7 @@ Usage:
         --bucket_name fimc-data \
         --asset_object_key benchmark/rs/gfm/ \
         --manifest-s3-key benchmark/stac-bench-cat/batch/gfm_manifest.jsonl \
+        [--after-date YYYY-MM-DD] [--before-date YYYY-MM-DD] [--dates date1,date2] \
         [--profile my-profile]
 """
 
@@ -21,9 +22,41 @@ import os
 import boto3
 
 from ingest.batch_utils import write_manifest
+from ingest.gfm.gfm_stac import SentinelName
 from ingest.utils import S3Utils
 
 logging.basicConfig(level=logging.INFO)
+
+
+def _scene_date_from_sent_ti_path(sent_ti_path: str):
+    """Extract scene acquisition date (YYYY-MM-DD) from sent_ti_path product name. Returns None if unparseable."""
+    product_name = sent_ti_path.strip("/").split("/")[-1]
+    try:
+        start_datetime, _ = SentinelName.extract_datetimes(product_name)
+        return start_datetime.date().strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def _filter_scenes_by_date_scope(scenes, after_date=None, before_date=None, dates_list=None):
+    """Filter scenes by scene acquisition date. Apply after_date, then before_date, then dates_list."""
+    if after_date is None and before_date is None and dates_list is None:
+        return scenes
+    filtered = []
+    for s in scenes:
+        scene_date = _scene_date_from_sent_ti_path(s["sent_ti_path"])
+        if scene_date is None:
+            continue
+        if after_date is not None and scene_date < after_date:
+            continue
+        if before_date is not None and scene_date > before_date:
+            continue
+        if dates_list is not None:
+            allowed = set(x.strip() for x in dates_list.split(",") if x.strip())
+            if scene_date not in allowed:
+                continue
+        filtered.append(s)
+    return filtered
 
 
 def parse_arguments():
@@ -35,6 +68,24 @@ def parse_arguments():
         type=str,
         required=True,
         help="S3 key where the output manifest JSONL will be written.",
+    )
+    parser.add_argument(
+        "--after-date",
+        type=str,
+        default=None,
+        help="Only include scenes with acquisition date >= YYYY-MM-DD.",
+    )
+    parser.add_argument(
+        "--before-date",
+        type=str,
+        default=None,
+        help="Only include scenes with acquisition date <= YYYY-MM-DD.",
+    )
+    parser.add_argument(
+        "--dates",
+        type=str,
+        default=None,
+        help="Comma-separated list of acquisition dates (YYYY-MM-DD).",
     )
     parser.add_argument("--profile", type=str, default=None, help="AWS profile name.")
     return parser.parse_args()
@@ -72,6 +123,13 @@ def main():
         sent_ti_paths = s3_utils.list_subdirectories(args.bucket_name, dfo_path)
         for sent_ti_path in sent_ti_paths:
             scenes.append({"dfo_path": dfo_path, "event_id": event_id, "sent_ti_path": sent_ti_path})
+
+    scenes = _filter_scenes_by_date_scope(
+        scenes,
+        after_date=args.after_date,
+        before_date=args.before_date,
+        dates_list=args.dates,
+    )
 
     logging.info("Total scenes: %d", len(scenes))
 

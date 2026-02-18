@@ -12,6 +12,7 @@ Usage:
         --asset_object_key benchmark/rs/PI4/ \
         --manifest-s3-key benchmark/stac-bench-cat/batch/gfm_exp_manifest.jsonl \
         [--after-date 2024-01-01] \
+        [--before-date 2024-12-31] \
         [--dates 2024-01-01,2024-01-15] \
         [--profile my-profile]
 """
@@ -45,6 +46,7 @@ def parse_arguments():
         default=None,
         help="Comma-separated list of specific dates to include (YYYY-MM-DD).",
     )
+    parser.add_argument("--before-date", type=str, default=None, help="Only include dates <= YYYY-MM-DD.")
     parser.add_argument("--profile", type=str, default=None, help="AWS profile name.")
     return parser.parse_args()
 
@@ -72,12 +74,14 @@ def main():
         for cp in page.get("CommonPrefixes", []):
             date_paths.append(cp["Prefix"])
 
-    # Filter by --after-date / --dates
+    # Filter by --after-date, --before-date, --dates (order: after, before, then dates list)
+    if args.after_date:
+        date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] >= args.after_date]
+    if args.before_date:
+        date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] <= args.before_date]
     if args.dates:
         allowed = set(d.strip() for d in args.dates.split(","))
         date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] in allowed]
-    elif args.after_date:
-        date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] >= args.after_date]
 
     logging.info("Found %d date directories", len(date_paths))
 

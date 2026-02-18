@@ -103,7 +103,7 @@ python3 -m ingest.ble.ble_col \
 
 #### Example: Ingest GFM (DFO) Data
 
-GFM uses Dartmouth Flood Observatory (DFO) events; data lives under `benchmark/rs/gfm/`. Supports `--workers`, `--checkpoint-every`, `--profile`, and OWP QC (use `--skip-owp-qc` to disable).
+GFM uses Dartmouth Flood Observatory (DFO) events; data lives under `benchmark/rs/gfm/`. Supports `--workers`, `--checkpoint-every`, `--profile`, and OWP QC (use `--skip-owp-qc` to disable). Optional date filters: `--after-date`, `--before-date`, `--dates` (limit by scene acquisition date parsed from the Sentinel product name).
 
 ```bash
 python3 -m ingest.gfm.gfm_col \
@@ -121,7 +121,7 @@ python3 -m ingest.gfm.gfm_col \
 
 #### Example: Ingest GFM Expanded Data
 
-GFM expanded uses date-based PI4 scenes under `benchmark/rs/PI4/`. When OWP QC is enabled (default), items get `owp:*` properties (e.g. `owp:qc_grade`, `owp:huc_summaries`). Use `--skip-owp-qc` for faster runs without QC.
+GFM expanded uses date-based PI4 scenes under `benchmark/rs/PI4/`. When OWP QC is enabled (default), items get `owp:*` properties (e.g. `owp:qc_grade`, `owp:huc_summaries`). Use `--skip-owp-qc` for faster runs without QC. Optional date filters: `--after-date`, `--before-date`, `--dates` (filter by date folder; e.g. only process `2024-01-01/` through `2024-06-30/`).
 
 ```bash
 python3 -m ingest.gfm_exp.gfm_exp_col \
@@ -188,7 +188,7 @@ GFM and GFM expanded support a 3-phase batch workflow for scaling to many scenes
 
 #### GFM batch
 
-**Phase 1 — Split** (discover DFO events, write manifest to S3):
+**Phase 1 — Split** (discover DFO events, write manifest to S3; optional `--after-date`, `--before-date`, `--dates` to limit manifest to scenes in that date range by acquisition date):
 
 ```bash
 python3 -m ingest.gfm.batch_split \
@@ -286,7 +286,7 @@ docker run --rm \
 
 #### GFM Expanded batch
 
-**Phase 1 — Split** (discover date/scene pairs, write manifest; GFM-exp supports `--after-date` and `--dates`):
+**Phase 1 — Split** (discover date/scene pairs, write manifest; GFM-exp supports `--after-date`, `--before-date`, and `--dates` (filter by date folder)):
 
 ```bash
 python3 -m ingest.gfm_exp.batch_split \
@@ -404,6 +404,7 @@ GFM and GFM Expanded additionally support:
 - `--skip-owp-qc`: Skip OWP QC grading and HUC-level metrics (faster runs)
 - `--hucs_object_key`: S3 key for HUC8 boundaries GPKG (GFM/GFM-exp)
 - `--boundaries_object_key`: S3 key for Mexico/Canada boundaries (GFM/GFM-exp; used to skip non-CONUS scenes)
+- **Date filters:** `--after-date` (YYYY-MM-DD), `--before-date` (YYYY-MM-DD), `--dates` (comma-separated list). Limit processing to a date range or specific dates. **GFM-exp:** filters by date folder (top-level PI4 dirs). **GFM:** filters by scene acquisition date (parsed from Sentinel product name in path). Applied in order: after_date, then before_date, then dates list.
 
 Batch-worker mode (GFM/GFM-exp) also uses: `--mode batch-worker`, `--manifest-s3-key`, `--partial-parquet-prefix`, `--job-index` (or `AWS_BATCH_JOB_ARRAY_INDEX`), `--scenes-per-job`
 

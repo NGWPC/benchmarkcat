@@ -8,6 +8,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from functools import partial
+from typing import Optional
 
 import boto3
 import geopandas as gpd
@@ -84,6 +85,24 @@ def parse_arguments():
         type=int,
         default=50,
         help="Every N merged scenes, flush item JSONs to S3 and write/upload parquet; 0 = only at end.",
+    )
+    parser.add_argument(
+        "--after-date",
+        type=str,
+        default=None,
+        help="Process only scenes with acquisition date >= YYYY-MM-DD.",
+    )
+    parser.add_argument(
+        "--before-date",
+        type=str,
+        default=None,
+        help="Process only scenes with acquisition date <= YYYY-MM-DD.",
+    )
+    parser.add_argument(
+        "--dates",
+        type=str,
+        default=None,
+        help="Comma-separated list of acquisition dates (YYYY-MM-DD).",
     )
     # Batch-worker mode args
     parser.add_argument(
@@ -259,6 +278,37 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
 
 def get_dfo_events(s3_utils, bucket_name, asset_object_key):
     return s3_utils.list_subdirectories(bucket_name, f"{asset_object_key}")
+
+
+def _scene_date_from_sent_ti_path(sent_ti_path: str) -> Optional[str]:
+    """Extract scene acquisition date (YYYY-MM-DD) from sent_ti_path product name. Returns None if unparseable."""
+    product_name = sent_ti_path.strip("/").split("/")[-1]
+    try:
+        start_datetime, _ = SentinelName.extract_datetimes(product_name)
+        return start_datetime.date().strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def filter_scenes_by_date_scope(work_items, after_date=None, before_date=None, dates_list=None):
+    """Filter work_items (dfo_path, event_id, sent_ti_path) by scene acquisition date. Apply after_date, then before_date, then dates_list."""
+    if after_date is None and before_date is None and dates_list is None:
+        return work_items
+    filtered = []
+    for dfo_path, event_id, sent_ti_path in work_items:
+        scene_date = _scene_date_from_sent_ti_path(sent_ti_path)
+        if scene_date is None:
+            continue
+        if after_date is not None and scene_date < after_date:
+            continue
+        if before_date is not None and scene_date > before_date:
+            continue
+        if dates_list is not None:
+            allowed = set(s.strip() for s in dates_list.split(",") if s.strip())
+            if scene_date not in allowed:
+                continue
+        filtered.append((dfo_path, event_id, sent_ti_path))
+    return filtered
 
 
 def process_event(
@@ -629,6 +679,13 @@ def main_batch_worker(args):
         country_boundaries = get_conus_neighbors(local_boundaries_path)
 
         work_items = [(s["dfo_path"], s["event_id"], s["sent_ti_path"]) for s in my_scenes]
+        work_items = filter_scenes_by_date_scope(
+            work_items,
+            after_date=args.after_date,
+            before_date=args.before_date,
+            dates_list=args.dates,
+        )
+        my_scenes = [{"dfo_path": d, "event_id": e, "sent_ti_path": s} for d, e, s in work_items]
 
         if args.workers <= 1:
             for scene in my_scenes:
@@ -692,6 +749,11 @@ def main():
 
     args = parse_arguments()
 
+    if args.after_date and args.before_date and args.after_date > args.before_date:
+        raise ValueError(
+            f"--after-date ({args.after_date}) must be <= --before-date ({args.before_date})"
+        )
+
     if args.mode == "batch-worker":
         main_batch_worker(args)
         return
@@ -746,33 +808,59 @@ def main():
         s3_utils.s3_client.download_file(args.bucket_name, args.boundaries_object_key, local_boundaries_path)
         country_boundaries = get_conus_neighbors(local_boundaries_path)
 
+        # Build flat work list: (dfo_path, event_id, sent_ti_path)
+        work_items = []
+        for dfo_path in dfo_events:
+            event_id = dfo_path.strip("/").split("/")[-1]
+            sent_ti_list = s3_utils.list_subdirectories(args.bucket_name, dfo_path)
+            for sent_ti_path in sent_ti_list:
+                work_items.append((dfo_path, event_id, sent_ti_path))
+
+        work_items = filter_scenes_by_date_scope(
+            work_items,
+            after_date=args.after_date,
+            before_date=args.before_date,
+            dates_list=args.dates,
+        )
+
         if args.workers <= 1:
-            for dfo_event in dfo_events:
-                print(f"===============processing {dfo_event}===============")
-                process_event(
-                    dfo_event,
+            catalog_path_opt = args.catalog_path if args.checkpoint_every > 0 else None
+            catalog_id_opt = catalog_id if args.checkpoint_every > 0 else None
+            for dfo_path, event_id, sent_ti_path in work_items:
+                logging.info("Processing %s (event %s)", sent_ti_path, event_id)
+                if catalog_path_opt is not None and catalog_id_opt is not None:
+                    if scene_already_uploaded(
+                        sent_ti_path,
+                        asset_handler.results_df,
+                        s3_utils,
+                        args.bucket_name,
+                        catalog_path_opt,
+                        catalog_id_opt,
+                    ):
+                        item_id = item_id_from_sent_ti_path(sent_ti_path)
+                        collection.add_link(
+                            pystac.Link(
+                                rel=pystac.RelType.ITEM,
+                                target=f"./{item_id}/{item_id}.json",
+                                media_type="application/geo+json",
+                            )
+                        )
+                        continue
+                item, asset_results = process_tile(
+                    sent_ti_path,
+                    event_id,
                     s3_utils,
                     args.bucket_name,
                     args.link_type,
-                    collection,
                     args.reprocess_assets,
                     asset_handler,
                     hucs_gdf,
                     country_boundaries=country_boundaries,
                     skip_owp_qc=args.skip_owp_qc,
-                    on_scene_done=on_scene_done,
-                    catalog_path=args.catalog_path if args.checkpoint_every > 0 else None,
-                    catalog_id=catalog_id if args.checkpoint_every > 0 else None,
                 )
+                if item is not None and asset_results is not None:
+                    on_scene_done(item, sent_ti_path, asset_results)
         else:
-            # Build flat work list: (dfo_path, event_id, sent_ti_path)
-            work_items = []
-            for dfo_path in dfo_events:
-                event_id = dfo_path.strip("/").split("/")[-1]
-                sent_ti_list = s3_utils.list_subdirectories(args.bucket_name, dfo_path)
-                for sent_ti_path in sent_ti_list:
-                    work_items.append((dfo_path, event_id, sent_ti_path))
-
             # Filter already-uploaded scenes when checkpointing is enabled
             if args.checkpoint_every > 0:
                 work_items_to_process = []

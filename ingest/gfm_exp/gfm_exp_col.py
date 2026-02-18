@@ -111,6 +111,12 @@ def parse_arguments():
         default=None,
         help="Comma-separated list of dates to process (e.g. 2024-01-01,2024-01-15).",
     )
+    parser.add_argument(
+        "--before-date",
+        type=str,
+        default=None,
+        help="Process only dates <= this (YYYY-MM-DD).",
+    )
     # Batch-worker mode args
     parser.add_argument(
         "--mode",
@@ -236,10 +242,12 @@ def _date_id_from_path(date_path):
     return date_path.strip("/").split("/")[-1]
 
 
-def filter_dates_by_scope(dates, after_date=None, dates_list=None):
-    """Filter dates by --after-date and --dates. Apply after_date first, then dates_list."""
+def filter_dates_by_scope(dates, after_date=None, before_date=None, dates_list=None):
+    """Filter dates by --after-date, --before-date, and --dates. Apply after_date, then before_date, then dates_list."""
     if after_date is not None:
         dates = [d for d in dates if _date_id_from_path(d) >= after_date]
+    if before_date is not None:
+        dates = [d for d in dates if _date_id_from_path(d) <= before_date]
     if dates_list is not None:
         allowed = set(s.strip() for s in dates_list.split(",") if s.strip())
         dates = [d for d in dates if _date_id_from_path(d) in allowed]
@@ -771,7 +779,9 @@ def main():
 
     collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)
-    dates = filter_dates_by_scope(dates, after_date=args.after_date, dates_list=args.dates)
+    dates = filter_dates_by_scope(
+        dates, after_date=args.after_date, before_date=args.before_date, dates_list=args.dates
+    )
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
     catalog_id = "gfm-expanded-collection"
     item_buffer = []
