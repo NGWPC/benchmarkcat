@@ -903,10 +903,12 @@ def main():
 
 if __name__ == "__main__":
     start_time = time.time()
-    multiprocessing.set_start_method("spawn", force=True)
-    main()
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    hours, rem = divmod(elapsed_time, 3600)
-    minutes, seconds = divmod(rem, 60)
-    logging.info(f"Total execution time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+        main()
+    finally:
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        hours, rem = divmod(elapsed_time, 3600)
+        minutes, seconds = divmod(rem, 60)
+        logging.info(f"Total execution time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
