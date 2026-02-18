@@ -7,5 +7,5 @@ __pycache__
 *.parquet
 *.gpkg
 
-plan/
+test-data/
 stac/

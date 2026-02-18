@@ -477,14 +477,42 @@ This script deletes and recreates a STAC collection on a STAC API. After the col
 
 JSON Schema definitions for validating STAC collections and items are in the `schemas/` directory.
 
+Two ways to validate:
+
+- **Against the official STAC spec:** use `stac validate <path>` (requires **stactools**: `pip install stactools`).
+- **Against this project's schemas:** use `stac-validator <path> --custom <schema-path>` (requires **stac-validator**: `pip install stac-validator`).
+
 ### Validating STAC Items
 
-```bash
-# Validate a collection
-stac validate --schema schemas/iceye/v1.0.0/iceye_collection.json collection.json
+**Spec conformance (stactools)**
 
-# Validate an item
-stac validate --schema schemas/iceye/v1.0.0/iceye_item.json item.json
+```bash
+# GFM and GFM expanded modified collection
+stac validate stac/gfm/gfm-collection-modified/collection.json
+stac validate stac/gfm-exp/gfm-expanded-collection-modified/collection.json
+
+# GFM and GFM expanded modified item
+stac validate stac/gfm/gfm-collection-modified/DFO-4230_tile-S1A_IW_GRDH_1SDV_20150316T235500_20150316T235525_005064_0065C2_6FB7/DFO-4230_tile-S1A_IW_GRDH_1SDV_20150316T235500_20150316T235525_005064_0065C2_6FB7.json
+
+stac validate stac/gfm-exp/gfm-expanded-collection-modified/GFM-expanded_S1A_IW_GRDH_1SDV_20210801T003626_20210801T003651_039029_049AEE_F470/GFM-expanded_S1A_IW_GRDH_1SDV_20210801T003626_20210801T003651_039029_049AEE_F470.json
+```
+
+**Custom schema (stac-validator)**
+
+```bash
+# ICEYE
+stac-validator collection.json --custom schemas/iceye/v1.0.0/iceye_collection.json
+stac-validator item.json --custom schemas/iceye/v1.0.0/iceye_item.json
+
+# GFM and GFM expanded modified collection
+stac-validator stac/gfm/gfm-collection-modified/collection.json --custom schemas/gfm/v1.0.0/gfm_collection.json
+stac-validator stac/gfm-exp/gfm-expanded-collection-modified/collection.json --custom schemas/gfm/v1.0.0/gfm_collection.json
+
+# GFM and GFM expanded modified item: schema uses relative $refs; run from schema directory so they resolve
+cd schemas/gfm/v1.0.0 && stac-validator ../../../stac/gfm/gfm-collection-modified/DFO-4230_tile-S1A_IW_GRDH_1SDV_20150316T235500_20150316T235525_005064_0065C2_6FB7/DFO-4230_tile-S1A_IW_GRDH_1SDV_20150316T235500_20150316T235525_005064_0065C2_6FB7.json --custom gfm_item.json
+
+# if shell is in schemas/gfm/v1.0.0, run the following else do a cd schemas/gfm/v1.0.0
+stac-validator ../../../stac/gfm-exp/gfm-expanded-collection-modified/GFM-expanded_S1A_IW_GRDH_1SDV_20210801T003626_20210801T003651_039029_049AEE_F470/GFM-expanded_S1A_IW_GRDH_1SDV_20210801T003626_20210801T003651_039029_049AEE_F470.json --custom gfm_item.json
 ```
 
 ### Schema Documentation
@@ -496,6 +524,7 @@ Each schema directory contains:
 
 See individual schema READMEs:
 - [BLE Schema](schemas/ble/v1.0.0/)
+- [GFM / GFM Expanded Schema](schemas/gfm/v1.0.0/)
 - [ICEYE Schema](schemas/iceye/v1.0.0/)
 - [USGS FIM Schema](schemas/usgs_fim/v1.0.0/)
 

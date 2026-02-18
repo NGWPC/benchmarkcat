@@ -16,7 +16,7 @@ logs/
 *.parquet
 *.gpkg
 
-plan/
+test-data/
 README.md
 schemas/
 scripts/

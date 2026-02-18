@@ -22,13 +22,13 @@
         "extent",
         "links",
         "item_assets",
-        "provider"
+        "providers"
       ],
       "properties": {
         "stac_version": {
           "title": "STAC version",
           "type": "string",
-          "const": "1.0.0"
+          "enum": ["1.0.0", "1.1.0"]
         },
         "stac_extensions": {
           "title": "STAC extensions",
