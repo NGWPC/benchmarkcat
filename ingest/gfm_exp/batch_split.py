@@ -17,99 +17,50 @@ Usage:
         [--profile my-profile]
 """
 
-import argparse
 import logging
-import os
 
-import boto3
-
-from ingest.batch_utils import write_manifest
-from ingest.utils import S3Utils
+from ingest.batch_utils import run_batch_split
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="Build gfm_exp scene manifest for batch processing.")
-    parser.add_argument("--bucket_name", type=str, default="fimc-data")
-    parser.add_argument("--asset_object_key", type=str, default="benchmark/rs/PI4/")
-    parser.add_argument(
-        "--manifest-s3-key",
-        type=str,
-        required=True,
-        help="S3 key where the output manifest JSONL will be written.",
-    )
-    parser.add_argument("--after-date", type=str, default=None, help="Only include dates >= YYYY-MM-DD.")
-    parser.add_argument(
-        "--dates",
-        type=str,
-        default=None,
-        help="Comma-separated list of specific dates to include (YYYY-MM-DD).",
-    )
-    parser.add_argument("--before-date", type=str, default=None, help="Only include dates <= YYYY-MM-DD.")
-    parser.add_argument("--profile", type=str, default=None, help="AWS profile name.")
-    return parser.parse_args()
-
-
-def main():
-    args = parse_arguments()
-
-    if args.profile is not None:
-        os.environ["AWS_PROFILE"] = args.profile
-    else:
-        os.environ.pop("AWS_PROFILE", None)
-
-    if args.profile is not None:
-        session = boto3.Session(profile_name=args.profile)
-        s3 = session.client("s3")
-    else:
-        s3 = boto3.client("s3")
-    s3_utils = S3Utils(s3)
-
-    # Discover all date directories
-    prefix = args.asset_object_key.rstrip("/") + "/"
+def discover_gfm_exp_scenes(s3_utils, bucket_name, asset_object_key, after_date, before_date, dates):
+    """Discover GFM-exp scenes: date directories -> sent_ti directories, filtered by date folder name."""
+    prefix = asset_object_key.rstrip("/") + "/"
     paginator = s3_utils.s3_client.get_paginator("list_objects_v2")
     date_paths = []
-    for page in paginator.paginate(Bucket=args.bucket_name, Prefix=prefix, Delimiter="/"):
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix, Delimiter="/"):
         for cp in page.get("CommonPrefixes", []):
             date_paths.append(cp["Prefix"])
 
-    # Filter by --after-date, --before-date, --dates (order: after, before, then dates list)
-    if args.after_date:
-        date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] >= args.after_date]
-    if args.before_date:
-        date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] <= args.before_date]
-    if args.dates:
-        allowed = set(d.strip() for d in args.dates.split(","))
+    # Filter by date folder name (string comparison on YYYY-MM-DD directory names)
+    if after_date:
+        date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] >= after_date]
+    if before_date:
+        date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] <= before_date]
+    if dates:
+        allowed = set(d.strip() for d in dates.split(","))
         date_paths = [dp for dp in date_paths if dp.rstrip("/").split("/")[-1] in allowed]
 
-    logging.info("Found %d date directories", len(date_paths))
+    logger.info("Found %d date directories", len(date_paths))
 
-    # Build flat scene list
     scenes = []
     for date_path in sorted(date_paths):
         date_id = date_path.rstrip("/").split("/")[-1]
-        sent_ti_paths = s3_utils.list_subdirectories(args.bucket_name, date_path)
+        sent_ti_paths = s3_utils.list_subdirectories(bucket_name, date_path)
         for sent_ti_path in sent_ti_paths:
             scenes.append({"date_path": date_path, "date_id": date_id, "sent_ti_path": sent_ti_path})
 
-    logging.info("Total scenes: %d", len(scenes))
+    return scenes
 
-    meta_extra = {}
-    if args.after_date is not None:
-        meta_extra["after_date"] = args.after_date
-    if args.before_date is not None:
-        meta_extra["before_date"] = args.before_date
-    if args.dates is not None:
-        meta_extra["dates"] = args.dates
-    write_manifest(
-        s3_utils,
-        args.bucket_name,
-        args.manifest_s3_key,
-        scenes,
-        meta_extra=meta_extra if meta_extra else None,
+
+def main():
+    run_batch_split(
+        description="gfm_exp",
+        default_asset_object_key="benchmark/rs/PI4/",
+        discover_scenes=discover_gfm_exp_scenes,
     )
-    logging.info("Manifest written to s3://%s/%s", args.bucket_name, args.manifest_s3_key)
 
 
 if __name__ == "__main__":

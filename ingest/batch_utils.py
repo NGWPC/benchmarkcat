@@ -223,3 +223,230 @@ def rebuild_collection_links(
             count += 1
 
     logger.info("Added %d item links to collection from s3://%s/%s", count, bucket_name, base)
+
+
+# ---------------------------------------------------------------------------
+# Unified batch_merge entry point
+# ---------------------------------------------------------------------------
+
+def run_batch_merge(
+    catalog_id: str,
+    collection_creator: Any,
+    description: str,
+    default_asset_object_key: str,
+    default_derived_metadata_path: str,
+) -> None:
+    """Shared batch_merge logic for gfm and gfm_exp pipelines.
+
+    Parses CLI arguments, merges partial parquets, rebuilds collection.json,
+    and optionally deletes the partials.
+
+    Args:
+        catalog_id: STAC collection id (e.g. "gfm-collection").
+        collection_creator: Callable(link_type, bucket_name, asset_object_key, s3_utils) -> pystac.Collection.
+        description: Short description for argparse help text.
+        default_asset_object_key: Default --asset_object_key value.
+        default_derived_metadata_path: Default --derived_metadata_path value.
+    """
+    import argparse
+    import os
+
+    import boto3
+
+    parser = argparse.ArgumentParser(description=f"Merge {description} batch-worker outputs.")
+    parser.add_argument("--bucket_name", type=str, default="fimc-data")
+    parser.add_argument(
+        "--partial-parquet-prefix",
+        type=str,
+        required=True,
+        help="S3 prefix where per-job partial parquets were written.",
+    )
+    parser.add_argument(
+        "--derived_metadata_path",
+        type=str,
+        default=default_derived_metadata_path,
+        help="S3 key of the master parquet file.",
+    )
+    parser.add_argument(
+        "--catalog_path",
+        type=str,
+        default="benchmark/stac-bench-cat/",
+        help="S3 prefix of the STAC catalog.",
+    )
+    parser.add_argument(
+        "--asset_object_key",
+        type=str,
+        default=default_asset_object_key,
+        help=f"S3 prefix for {description} data (used when creating collection if missing).",
+    )
+    parser.add_argument(
+        "--link_type",
+        type=str,
+        default="uri",
+        help='Link type for collection href generation ("uri" or "url").',
+    )
+    parser.add_argument(
+        "--skip-delete-partials",
+        action="store_true",
+        help="Do not delete partial parquets after merging (useful for debugging).",
+    )
+    parser.add_argument("--profile", type=str, default=None, help="AWS profile name.")
+    args = parser.parse_args()
+
+    if args.profile is not None:
+        os.environ["AWS_PROFILE"] = args.profile
+    else:
+        os.environ.pop("AWS_PROFILE", None)
+
+    if args.profile is not None:
+        session = boto3.Session(profile_name=args.profile)
+        s3 = session.client("s3")
+    else:
+        s3 = boto3.client("s3")
+
+    from ingest.utils import S3Utils
+
+    s3_utils = S3Utils(s3)
+
+    # 1. Merge partial parquets into master
+    logger.info("Merging partial parquets...")
+    merge_partial_parquets(
+        s3_utils,
+        args.bucket_name,
+        args.partial_parquet_prefix,
+        args.derived_metadata_path,
+    )
+
+    # 2. Rebuild collection.json (or create if missing)
+    logger.info("Rebuilding collection links...")
+    collection_key = (
+        args.catalog_path.rstrip("/") + "/" + catalog_id + "/collection.json"
+    )
+    try:
+        response = s3_utils.s3_client.get_object(Bucket=args.bucket_name, Key=collection_key)
+        collection_dict = json.loads(response["Body"].read().decode("utf-8"))
+        collection = pystac.Collection.from_dict(collection_dict)
+    except Exception:
+        logger.warning("Could not load existing collection.json — creating from scratch")
+        collection = collection_creator(
+            args.link_type, args.bucket_name, args.asset_object_key, s3_utils
+        )
+
+    # Remove existing item links so we can re-add from S3 listing
+    collection.links = [lk for lk in collection.links if lk.rel != pystac.RelType.ITEM]
+    rebuild_collection_links(
+        s3_utils,
+        args.bucket_name,
+        args.catalog_path,
+        catalog_id,
+        collection,
+    )
+    s3_utils.update_collection_or_bootstrap(
+        collection, catalog_id, args.catalog_path, args.bucket_name
+    )
+    logger.info("Collection.json updated.")
+
+    # 3. Delete partial parquets
+    if not args.skip_delete_partials:
+        logger.info("Deleting partial parquets...")
+        delete_partial_parquets(s3_utils, args.bucket_name, args.partial_parquet_prefix)
+
+    logger.info("%s batch merge complete.", description)
+
+
+# ---------------------------------------------------------------------------
+# Unified batch_split entry point
+# ---------------------------------------------------------------------------
+
+def run_batch_split(
+    description: str,
+    default_asset_object_key: str,
+    discover_scenes: Any,
+) -> None:
+    """Shared batch_split logic for gfm and gfm_exp pipelines.
+
+    Parses CLI arguments, calls the pipeline-specific ``discover_scenes``
+    callback to build the scene list, and writes the manifest to S3.
+
+    Args:
+        description: Short description for argparse help text (e.g. "gfm", "gfm_exp").
+        default_asset_object_key: Default --asset_object_key value.
+        discover_scenes: Callable(s3_utils, bucket_name, prefix, after_date, before_date, dates)
+            -> List[Dict].  Returns the scene dicts to write to the manifest.
+    """
+    import argparse
+    import os
+
+    import boto3
+
+    parser = argparse.ArgumentParser(description=f"Build {description} scene manifest for batch processing.")
+    parser.add_argument("--bucket_name", type=str, default="fimc-data")
+    parser.add_argument("--asset_object_key", type=str, default=default_asset_object_key)
+    parser.add_argument(
+        "--manifest-s3-key",
+        type=str,
+        required=True,
+        help="S3 key where the output manifest JSONL will be written.",
+    )
+    parser.add_argument(
+        "--after-date",
+        type=str,
+        default=None,
+        help="Only include scenes/dates >= YYYY-MM-DD.",
+    )
+    parser.add_argument(
+        "--before-date",
+        type=str,
+        default=None,
+        help="Only include scenes/dates <= YYYY-MM-DD.",
+    )
+    parser.add_argument(
+        "--dates",
+        type=str,
+        default=None,
+        help="Comma-separated list of dates (YYYY-MM-DD).",
+    )
+    parser.add_argument("--profile", type=str, default=None, help="AWS profile name.")
+    args = parser.parse_args()
+
+    if args.profile is not None:
+        os.environ["AWS_PROFILE"] = args.profile
+    else:
+        os.environ.pop("AWS_PROFILE", None)
+
+    if args.profile is not None:
+        session = boto3.Session(profile_name=args.profile)
+        s3 = session.client("s3")
+    else:
+        s3 = boto3.client("s3")
+
+    from ingest.utils import S3Utils
+
+    s3_utils = S3Utils(s3)
+
+    scenes = discover_scenes(
+        s3_utils,
+        args.bucket_name,
+        args.asset_object_key,
+        args.after_date,
+        args.before_date,
+        args.dates,
+    )
+
+    logger.info("Total scenes: %d", len(scenes))
+
+    meta_extra = {}
+    if args.after_date is not None:
+        meta_extra["after_date"] = args.after_date
+    if args.before_date is not None:
+        meta_extra["before_date"] = args.before_date
+    if args.dates is not None:
+        meta_extra["dates"] = args.dates
+    write_manifest(
+        s3_utils,
+        args.bucket_name,
+        args.manifest_s3_key,
+        scenes,
+        meta_extra=meta_extra if meta_extra else None,
+    )
+    logger.info("Manifest written to s3://%s/%s", args.bucket_name, args.manifest_s3_key)
