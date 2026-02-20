@@ -612,6 +612,49 @@ Flood extent collections include associated discharge data from the NWM (Nationa
 - Statistics (min, max, mean, median) computed
 - Column metadata documented in STAC properties
 
+### OWP QC Grading (GFM / GFM Expanded)
+
+When OWP QC is enabled (default for GFM and GFM Expanded), each STAC item is enriched with per-HUC reliability and severity metrics. The QC pipeline mosaics raster tiles, clips to each intersecting HUC8, and computes flood area, uncertainty, observability, advisory noise, affected population, and anomaly ratio.
+
+#### `owp:*` STAC Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `owp:qc_grade` | string | Scene-level Data Quality Grade — best grade across all HUCs (`A`/`B`/`C`/`D`) |
+| `owp:impact_score` | string | Scene-level Impact Score — highest impact across all HUCs (`High`/`Medium`/`Low`) |
+| `owp:active_hucs` | list[string] | HUC8 ids that received grade A or B |
+| `owp:total_flood_area_km2` | float | Sum of flood area across all HUCs (km²) |
+| `owp:huc_summaries` | list[object] | Per-HUC detail objects (see schema below) |
+
+#### HUC Summary Object
+
+Each entry in `owp:huc_summaries` has this structure:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `huc8_id` | string | HUC8 identifier |
+| `qc_grade` | string | Data Quality Grade for this HUC (`A`/`B`/`C`/`D`) |
+| `impact` | string | Impact Score for this HUC (`High`/`Medium`/`Low`) |
+| `metrics.flood_area_km2` | float | Flood extent area in km² (pixel count × 0.0004) |
+| `metrics.uncertainty_mean` | float | Mean uncertainty over flooded pixels |
+| `metrics.observability_pct` | float | Percentage of valid pixels not excluded (0–100) |
+| `metrics.advisory_noise_pct` | float | Percentage of flooded pixels flagged by advisory layer (0–100) |
+| `metrics.affected_pop` | int | Sum of population raster values over flooded pixels |
+| `metrics.normalized_anomaly_ratio` | float | Ratio of flood pixels to observed-water pixels |
+
+#### Grading Thresholds
+
+- **Grade A**: uncertainty > 75, observability > 80%, advisory noise < 5%
+- **Grade B**: uncertainty > 60, observability > 60%, advisory noise < 20%
+- **Grade C**: flood signal present but metrics below B thresholds
+- **Grade D**: incomplete data, observability < 50%, or advisory noise > 50%
+
+#### Impact Thresholds
+
+- **High**: affected population > 100 or flood area > 5 km²
+- **Medium**: affected population > 10 or flood area > 1 km²
+- **Low**: below Medium thresholds
+
 ## Shared Utilities
 
 Shared utilities are in `ingest/utils.py` (S3Utils, RasterUtils) and `ingest/flows.py` (FlowfileUtils):

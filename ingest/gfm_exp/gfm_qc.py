@@ -32,47 +32,57 @@ REQUIRED_LAYERS = [
 # We use this for the area calculation formula.
 REF_KM2_PER_PIXEL = 0.0004
 
-def _resolve_layer_keys(
+# Fallback nodata value for uint8 rasters when metadata is missing
+DEFAULT_NODATA = 255
+
+def _resolve_all_tile_keys(
     s3_utils: Any,
     bucket_name: str,
     sent_ti_path: str,
-    equi7tile: str,
-) -> Dict[str, Optional[str]]:
-    """Resolve S3 keys for all required layers for a specific equi7tile.
+    equi7tiles: List[str],
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """Resolve S3 keys for all required layers across all tiles in a single S3 call.
+
+    Makes one list_resources_with_string call for all tiles and partitions the
+    results client-side, reducing N ListObjects API calls to 1.
 
     Args:
         s3_utils: S3 utilities object with list_resources_with_string.
         bucket_name: S3 bucket name.
-        sent_ti_path: S3 prefix for the scene (e.g. benchmark/rs/PI4/date/sent_ti/).
-        equi7tile: Equi7 tile id (e.g. E078N027T3).
+        sent_ti_path: S3 prefix for the scene.
+        equi7tiles: List of equi7 tile ids.
 
     Returns:
-        Dict mapping layer name (e.g. ENSEMBLE_FLOOD) to S3 key or None if missing.
-        On S3 listing failure, returns a dict with all layer keys mapped to None.
+        Dict mapping tile id to {layer_name: s3_key_or_None}.
     """
     try:
         all_keys = s3_utils.list_resources_with_string(
-            bucket_name, sent_ti_path, [equi7tile]
+            bucket_name, sent_ti_path, equi7tiles
         )
     except Exception as e:
         logger.warning(
-            "Failed to list S3 resources for tile %s: %s",
-            equi7tile,
+            "Failed to list S3 resources for tiles %s: %s",
+            equi7tiles,
             e,
             exc_info=False,
         )
-        return {ly: None for ly in REQUIRED_LAYERS}
+        return {tile: {ly: None for ly in REQUIRED_LAYERS} for tile in equi7tiles}
+
     result = {}
-    for layer in REQUIRED_LAYERS:
-        found = [k for k in all_keys if layer in k]
-        raster_found = [k for k in found if k.lower().endswith((".tif", ".tiff"))]
-        result[layer] = raster_found[0] if raster_found else None
-        if found and not raster_found:
-            logger.debug(
-                "No .tif/.tiff key for layer %s (tile %s); only non-raster keys matched.",
-                layer,
-                equi7tile,
-            )
+    for tile in equi7tiles:
+        tile_keys = [k for k in all_keys if tile in k]
+        tile_result = {}
+        for layer in REQUIRED_LAYERS:
+            found = [k for k in tile_keys if layer in k]
+            raster_found = [k for k in found if k.lower().endswith((".tif", ".tiff"))]
+            tile_result[layer] = raster_found[0] if raster_found else None
+            if found and not raster_found:
+                logger.debug(
+                    "No .tif/.tiff key for layer %s (tile %s); only non-raster keys matched.",
+                    layer,
+                    tile,
+                )
+        result[tile] = tile_result
     return result
 
 def _check_scene_completeness_from_keys(
@@ -133,7 +143,7 @@ def _get_mosaic_only(
     """
     src_files_to_mosaic = []
     files_to_close = []
-    work_nodata = detected_nodata if detected_nodata is not None else 255
+    work_nodata = detected_nodata if detected_nodata is not None else DEFAULT_NODATA
 
     try:
         for fpath in tile_files.values():
@@ -184,7 +194,7 @@ def _mask_mosaic_to_geometry(
     Returns:
         First band of masked array (HUC clip), or None if mask fails.
     """
-    work_nodata = nodata if nodata is not None else 255
+    work_nodata = nodata if nodata is not None else DEFAULT_NODATA
     try:
         # geometry_mask returns True where pixels are OUTSIDE the geometry
         outside_mask = geometry_mask(
@@ -239,7 +249,7 @@ def _metrics_from_layer_arrays(
     if flood_arr is None:
         return metrics
 
-    work_nodata = detected_nodata if detected_nodata is not None else 255
+    work_nodata = detected_nodata if detected_nodata is not None else DEFAULT_NODATA
     valid_mask = (flood_arr != work_nodata)
     flood_pixels = (flood_arr == 1) & valid_mask
     flood_count = np.sum(flood_pixels)
@@ -357,10 +367,8 @@ def compute_scene_qc(
         logger.warning("HUC GeoDataFrame has no CRS. Assuming EPSG:4326.")
         hucs_gdf.set_crs("EPSG:4326", inplace=True)
 
-    # Resolve S3 keys once per tile (avoids duplicate ListObjects calls)
-    all_tile_keys = {}
-    for tile in equi7tiles_list:
-        all_tile_keys[tile] = _resolve_layer_keys(s3_utils, bucket_name, sent_ti_path, tile)
+    # Resolve S3 keys for all tiles in a single S3 API call
+    all_tile_keys = _resolve_all_tile_keys(s3_utils, bucket_name, sent_ti_path, equi7tiles_list)
 
     scene_data_complete = _check_scene_completeness_from_keys(all_tile_keys)
 
@@ -404,7 +412,7 @@ def compute_scene_qc(
     except (AttributeError, TypeError):
         pass
 
-    detected_nodata = metadata["nodata"] if metadata["nodata"] is not None else 255
+    detected_nodata = metadata["nodata"] if metadata["nodata"] is not None else DEFAULT_NODATA
     raster_crs = metadata["crs"]
 
     # Build mosaics once per layer (scene-level)
