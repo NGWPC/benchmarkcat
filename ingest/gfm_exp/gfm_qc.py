@@ -8,9 +8,31 @@ when HUCs cross tile boundaries.
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import yaml
+
 logger = logging.getLogger(__name__)
+
+_QC_CONFIG_PATH = Path(__file__).parent / "qc_config.yaml"
+
+
+def load_qc_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load QC grading and impact criteria from a YAML file.
+
+    Args:
+        config_path: Path to a YAML config file. Defaults to the bundled qc_config.yaml.
+
+    Returns:
+        Dict with "version", "grading", and "impact" keys.
+    """
+    path = config_path or _QC_CONFIG_PATH
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+_QC_CONFIG = load_qc_config()
 
 import geopandas as gpd
 import numpy as np
@@ -298,16 +320,22 @@ def _metrics_from_layer_arrays(
     metrics["normalized_anomaly_ratio"] = round(metrics["normalized_anomaly_ratio"], 4)
     return metrics
 
-def _grade_qc(data_complete: bool, metrics: Dict[str, Any]) -> str:
-    """Assign Data Quality Grade A/B/C/D using thresholds.
+def _grade_qc(
+    data_complete: bool,
+    metrics: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Assign Data Quality Grade A/B/C/D using thresholds from config.
 
     Args:
         data_complete: True if all required layer files are present for the scene.
         metrics: Per-HUC metrics (observability_pct, advisory_noise_pct, etc.).
+        config: QC config dict (uses module-level _QC_CONFIG if None).
 
     Returns:
         "A", "B", "C", or "D".
     """
+    cfg = (config or _QC_CONFIG)["grading"]
     if not data_complete:
         return "D"
     obs = metrics.get("observability_pct", 0.0)
@@ -315,25 +343,40 @@ def _grade_qc(data_complete: bool, metrics: Dict[str, Any]) -> str:
     unc = metrics.get("uncertainty_mean", 0.0)
     flood_signal = (metrics.get("flood_area_km2", 0.0) or 0.0) > 0
 
-    if obs < 50 or noise > 50: return "D"
-    if unc > 75 and obs > 80 and noise < 5: return "A"
-    if unc > 60 and obs > 60 and noise < 20: return "B"
-    if flood_signal: return "C"
+    d = cfg["D_floor"]
+    if obs < d["observability_pct_lt"] or noise > d["advisory_noise_pct_gt"]:
+        return "D"
+    a = cfg["A"]
+    if unc > a["uncertainty_mean_gt"] and obs > a["observability_pct_gt"] and noise < a["advisory_noise_pct_lt"]:
+        return "A"
+    b = cfg["B"]
+    if unc > b["uncertainty_mean_gt"] and obs > b["observability_pct_gt"] and noise < b["advisory_noise_pct_lt"]:
+        return "B"
+    if flood_signal:
+        return "C"
     return "D"
 
-def _impact_score(flood_area: float, pop: float) -> str:
+def _impact_score(
+    flood_area: float,
+    pop: float,
+    config: Optional[Dict[str, Any]] = None,
+) -> str:
     """Assign Impact Score (High/Medium/Low) from flood area and affected population.
 
     Args:
         flood_area: Total flood area in km².
         pop: Affected population count.
+        config: QC config dict (uses module-level _QC_CONFIG if None).
 
     Returns:
         "High", "Medium", or "Low".
     """
-    if pop > 100 or flood_area > 5.0:
+    cfg = (config or _QC_CONFIG)["impact"]
+    high = cfg["High"]
+    if pop > high["affected_pop_gt"] or flood_area > high["flood_area_km2_gt"]:
         return "High"
-    if pop > 10 or flood_area > 1.0:
+    med = cfg["Medium"]
+    if pop > med["affected_pop_gt"] or flood_area > med["flood_area_km2_gt"]:
         return "Medium"
     return "Low"
 
@@ -501,6 +544,11 @@ def compute_scene_qc(
         "owp:active_hucs": active_hucs,
         "owp:total_flood_area_km2": round(total_flood_area_km2, 4),
         "owp:huc_summaries": huc_summaries,
+        "owp:qc_criteria": {
+            "version": _QC_CONFIG["version"],
+            "grading": _QC_CONFIG["grading"],
+            "impact": _QC_CONFIG["impact"],
+        },
     }
 
 def _empty_owp_properties() -> Dict[str, Any]:
@@ -511,4 +559,9 @@ def _empty_owp_properties() -> Dict[str, Any]:
         "owp:active_hucs": [],
         "owp:total_flood_area_km2": 0.0,
         "owp:huc_summaries": [],
+        "owp:qc_criteria": {
+            "version": _QC_CONFIG["version"],
+            "grading": _QC_CONFIG["grading"],
+            "impact": _QC_CONFIG["impact"],
+        },
     }

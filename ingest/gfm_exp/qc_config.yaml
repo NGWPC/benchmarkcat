@@ -1,0 +1,35 @@
+# OWP QC grading and impact criteria for GFM / GFM Expanded scenes.
+# Edit thresholds here.
+#
+# Grading logic (evaluated top-down; first match wins; "D" is the fallback):
+#   1. D_floor: if ANY condition is true, grade is D regardless of other metrics
+#   2. A: all conditions must be true
+#   3. B: all conditions must be true
+#   4. C: assigned when flood_area_km2 > 0 and no higher grade matched
+#   5. D: default fallback
+#
+# Impact logic (evaluated top-down; first match wins; "Low" is the fallback):
+#   Conditions within each level are OR'd (either pop OR area triggers the level)
+
+version: "1.0"
+
+grading:
+  D_floor:
+    observability_pct_lt: 50     # grade is D if observability < this
+    advisory_noise_pct_gt: 50    # grade is D if advisory noise > this
+  A:
+    uncertainty_mean_gt: 75
+    observability_pct_gt: 80
+    advisory_noise_pct_lt: 5
+  B:
+    uncertainty_mean_gt: 60
+    observability_pct_gt: 60
+    advisory_noise_pct_lt: 20
+
+impact:
+  High:
+    affected_pop_gt: 100
+    flood_area_km2_gt: 5.0
+  Medium:
+    affected_pop_gt: 10
+    flood_area_km2_gt: 1.0

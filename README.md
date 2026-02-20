@@ -625,6 +625,7 @@ When OWP QC is enabled (default for GFM and GFM Expanded), each STAC item is enr
 | `owp:active_hucs` | list[string] | HUC8 ids that received grade A or B |
 | `owp:total_flood_area_km2` | float | Sum of flood area across all HUCs (km²) |
 | `owp:huc_summaries` | list[object] | Per-HUC detail objects (see schema below) |
+| `owp:qc_criteria` | object | Snapshot of grading/impact thresholds used to produce grades (version, grading rules, impact rules) |
 
 #### HUC Summary Object
 
