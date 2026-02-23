@@ -2,7 +2,6 @@ import copy
 import json
 import logging
 import os
-import pdb
 import re
 import tempfile
 from calendar import month_abbr, month_name
@@ -13,8 +12,7 @@ import fsspec
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
-from osgeo import ogr, osr
-from shapely.geometry import box
+from osgeo import ogr
 
 import ingest.hwm.hwm_stac as hwm_stac
 from ingest.flows import FlowfileUtils

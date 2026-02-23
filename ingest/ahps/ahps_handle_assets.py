@@ -2,16 +2,14 @@ import copy
 import json
 import logging
 import os
-import pdb
 import tempfile
 from typing import Any, Dict, List
 
 import pandas as pd
-from shapely.geometry import shape
 
 from ingest.ahps.ahps_stac import AHPSFIMInfo, GeoJSONHandler
 from ingest.flows import FlowfileUtils
-from ingest.utils import RasterUtils, S3Utils
+from ingest.utils import RasterUtils
 
 
 class AHPSFIMAssetHandler:
@@ -106,7 +104,6 @@ class AHPSFIMAssetHandler:
             "thumbnail": thumbnail,
             "wkt2_string": wkt2_string,
         }
-        # pdb.set_trace()
         self.write_data_parquet(results)
         return results[gauge_path]
 

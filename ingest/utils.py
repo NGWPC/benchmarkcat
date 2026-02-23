@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
 import numpy as np
@@ -151,16 +152,34 @@ class S3Utils:
 
         return catalog, catalog_local_path
 
-    def upload_directory_to_s3(self, directory_path, bucket_name, destination_path):
+    def upload_directory_to_s3(self, directory_path, bucket_name, destination_path, max_workers=32):
+        upload_tasks = []
         for root, _, files in os.walk(directory_path):
             for file in files:
                 file_path = os.path.join(root, file)
                 s3_key = os.path.join(destination_path, os.path.relpath(file_path, directory_path))
-                try:
-                    self.s3_client.upload_file(file_path, bucket_name, s3_key)
-                    print(f"Uploaded {file_path} to s3://{bucket_name}/{s3_key}")
-                except (NoCredentialsError, ClientError) as e:
-                    print(f"Failed to upload {file_path} to s3://{bucket_name}/{s3_key}: {e}")
+                upload_tasks.append((file_path, s3_key))
+        total = len(upload_tasks)
+        uploaded = [0]
+        log_every = 10_000
+
+        def upload_one(args):
+            file_path, s3_key = args
+            try:
+                self.s3_client.upload_file(file_path, bucket_name, s3_key)
+                return True
+            except (NoCredentialsError, ClientError) as e:
+                logging.error("Failed to upload %s to s3://%s/%s: %s", file_path, bucket_name, s3_key, e)
+                return False
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(upload_one, task): task for task in upload_tasks}
+            for future in as_completed(futures):
+                if future.result():
+                    uploaded[0] += 1
+                if uploaded[0] % log_every == 0 and uploaded[0] > 0:
+                    logging.info("Uploaded %s / %s files to S3", uploaded[0], total)
+        logging.info("Uploaded %s files to S3", total)
 
     def update_collection(self, collection, catalog_id, catalog_path, bucket_name):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -181,7 +200,11 @@ class S3Utils:
                     print(
                         f"Warning: Could not remove existing child '{catalog_id}' (missing file), will replace with new version"
                     )
-                    pass
+                    # Manually remove the stale link to avoid duplicate when add_child is called next
+                    catalog.links = [
+                        link for link in catalog.links
+                        if not (link.rel == pystac.RelType.CHILD and link.target and catalog_id in str(link.target))
+                    ]
                 else:
                     raise
 
@@ -191,6 +214,69 @@ class S3Utils:
                 root_href=temp_dir, catalog_type=pystac.CatalogType.SELF_CONTAINED, skip_unresolved=True
             )
 
+            self.upload_directory_to_s3(temp_dir, bucket_name, catalog_path)
+
+    def update_collection_or_bootstrap(self, collection, catalog_id, catalog_path, bucket_name):
+        """Update collection in catalog, or bootstrap root catalog and collection when missing."""
+        catalog_key = f"{catalog_path.rstrip('/')}/catalog.json"
+        try:
+            self.s3_client.get_object(Bucket=bucket_name, Key=catalog_key)
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "NoSuchKey":
+                raise
+            # Bootstrap: create root catalog and collection
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root_catalog = pystac.Catalog(
+                    id="stac-catalog",
+                    description="STAC catalog",
+                    title="STAC catalog",
+                    catalog_type=pystac.CatalogType.SELF_CONTAINED,
+                )
+                root_catalog.set_root(root_catalog)
+                root_catalog.set_self_href(os.path.join(temp_dir, "catalog.json"))
+                collection.set_self_href(os.path.join(temp_dir, catalog_id, "collection.json"))
+                root_catalog.add_child(collection)
+                root_catalog.normalize_and_save(
+                    root_href=temp_dir,
+                    catalog_type=pystac.CatalogType.SELF_CONTAINED,
+                    skip_unresolved=True,
+                )
+                self.upload_directory_to_s3(temp_dir, bucket_name, catalog_path)
+            return
+
+        # Catalog exists: same logic as update_collection
+        with tempfile.TemporaryDirectory() as temp_dir:
+            catalog, catalog_local_path = self.download_catalog_and_collections(
+                catalog_key, bucket_name, temp_dir
+            )
+            catalog.set_root(catalog)
+            catalog.set_self_href(catalog_local_path)
+            try:
+                catalog.remove_child(catalog_id)
+            except (KeyError, Exception) as e:
+                if "KeyError" in str(type(e).__name__):
+                    pass
+                elif "does not resolve to a STAC object" in str(e) or "No such file or directory" in str(e):
+                    print(
+                        f"Warning: Could not remove existing child '{catalog_id}' (missing file), will replace with new version"
+                    )
+                    catalog.links = [
+                        link
+                        for link in catalog.links
+                        if not (
+                            link.rel == pystac.RelType.CHILD
+                            and link.target
+                            and catalog_id in str(link.target)
+                        )
+                    ]
+                else:
+                    raise
+            catalog.add_child(collection)
+            catalog.normalize_and_save(
+                root_href=temp_dir,
+                catalog_type=pystac.CatalogType.SELF_CONTAINED,
+                skip_unresolved=True,
+            )
             self.upload_directory_to_s3(temp_dir, bucket_name, catalog_path)
 
     def generate_href(self, bucket_name, path, link_type, expiration=7 * 24 * 60 * 60):

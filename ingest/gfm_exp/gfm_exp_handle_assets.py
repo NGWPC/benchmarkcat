@@ -2,13 +2,11 @@ import copy
 import json
 import logging
 import os
-import pdb
 import re
 import tempfile
 from typing import Dict
 
 import pandas as pd
-from shapely.geometry import mapping, shape
 
 from ingest.flows import FlowfileUtils
 from ingest.gfm.gfm_stac import GFMGeometryCreator, GFMInfo
@@ -16,14 +14,23 @@ from ingest.utils import RasterUtils
 
 
 class GFMExpAssetHandler:
-    def __init__(self, s3_utils, bucket_name, derived_metadata_path, results_file="gfm_expanded_collection.parquet"):
+    def __init__(
+        self,
+        s3_utils,
+        bucket_name,
+        derived_metadata_path,
+        results_file="gfm_expanded_collection.parquet",
+        initial_results_df=None,
+    ):
         self.s3_utils = s3_utils
         self.bucket_name = bucket_name
         self.derived_metadata_path = derived_metadata_path
         self.results_file = results_file
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.local_results_file = os.path.join(script_dir, results_file)
-        self.results_df = self.load_results()
+        self.local_results_file = os.path.join(tempfile.gettempdir(), results_file)
+        if initial_results_df is not None:
+            self.results_df = initial_results_df
+        else:
+            self.results_df = self.load_results()
 
     def load_results(self):
         try:
@@ -150,7 +157,7 @@ class GFMExpAssetHandler:
                 flowfile_ids = [f"NWM_{version_string}_flowfile"]
 
                 # Create a deep copy of the columns list to modify
-                modified_columns = [{k: v.copy() for k, v in GFMInfo.columns_list[0].items()}]
+                modified_columns = [copy.deepcopy(GFMInfo.columns_list[0])]
 
                 # Update the column data sources with correct version
                 modified_columns[0]["feature_id"]["Column data source"] = f"NWM {version_string} hydrofabric"
@@ -161,9 +168,9 @@ class GFMExpAssetHandler:
                 return FlowfileUtils.create_flowfile_object(flowfile_ids, flowstats, modified_columns), flowfile_key
             else:
                 logging.warning(f"Could not extract NWM version from filename: {flowfile_name}")
-                modified_columns = [{k: v.copy() for k, v in GFMInfo.columns_list[0].items()}]
+                modified_columns = [copy.deepcopy(GFMInfo.columns_list[0])]
                 modified_columns[0]["feature_id"]["Column data source"] = "NWM unknown version hydrofabric"
-                modified_columns[0]["discharge"]["Column data source"] = "NWM unkown version ANA discharge data"
+                modified_columns[0]["discharge"]["Column data source"] = "NWM unknown version ANA discharge data"
 
                 flowfile_df = FlowfileUtils.download_flowfiles(bucket_name, flowfile_key, self.s3_utils.s3_client)
                 flowstats = FlowfileUtils.extract_flowstats(flowfile_df)
@@ -196,25 +203,50 @@ class GFMExpAssetHandler:
     def write_data_parquet(self, results):
         # Create a deep copy to avoid modifying the original. You will have issues if you don't do this.
         results_copy = copy.deepcopy(results)
+        results_for_df = {}
         for path, data in results_copy.items():
+            row_data = {k: v for k, v in data.items() if k != "sent_ti_path"}
             for field in ["flowfile_object", "geometry", "bbox", "equi7tile_areas"]:
-                if field in data and (isinstance(data[field], (dict, list)) or data[field] is None):
-                    data[field] = json.dumps(data[field])
+                if field in row_data and (isinstance(row_data[field], (dict, list)) or row_data[field] is None):
+                    row_data[field] = json.dumps(row_data[field])
+            results_for_df[path] = row_data
 
         new_df = (
-            pd.DataFrame.from_dict(results_copy, orient="index").reset_index().rename(columns={"index": "sent_ti_path"})
+            pd.DataFrame.from_dict(results_for_df, orient="index")
+            .reset_index()
+            .rename(columns={"index": "sent_ti_path"})
         )
         self.results_df = self.results_df[~self.results_df["sent_ti_path"].isin(new_df["sent_ti_path"])]
         self.results_df = pd.concat([self.results_df, new_df], ignore_index=True)
         self.results_df.to_parquet(self.local_results_file, index=False)
 
-    def upload_modified_parquet(self):
+    def merge_single_result(self, sent_ti_path: str, asset_results: Dict) -> None:
+        """Merge a single scene's asset_results into results_df (in memory).
+
+        Used by the main process to accumulate results from workers. Caller
+        writes parquet once at end (e.g. via upload_modified_parquet).
+        """
+        row_data = {
+            k: v for k, v in copy.deepcopy(asset_results).items() if k != "sent_ti_path"
+        }
+        results = {sent_ti_path: row_data}
+        for path, data in results.items():
+            for field in ["flowfile_object", "geometry", "bbox", "equi7tile_areas"]:
+                if field in data and (isinstance(data[field], (dict, list)) or data[field] is None):
+                    data[field] = json.dumps(data[field])
+        new_df = (
+            pd.DataFrame.from_dict(results, orient="index").reset_index().rename(columns={"index": "sent_ti_path"})
+        )
+        self.results_df = self.results_df[~self.results_df["sent_ti_path"].isin(new_df["sent_ti_path"])]
+        self.results_df = pd.concat([self.results_df, new_df], ignore_index=True)
+
+    def upload_modified_parquet(self, remove_local=True):
         try:
             self.s3_utils.s3_client.upload_file(self.local_results_file, self.bucket_name, self.derived_metadata_path)
             logging.info(f"Successfully uploaded {self.local_results_file}")
         except Exception as e:
             logging.error(f"Failed to upload {self.local_results_file}: {e}")
         finally:
-            if os.path.exists(self.local_results_file):
+            if remove_local and os.path.exists(self.local_results_file):
                 os.remove(self.local_results_file)
                 logging.info(f"Removed local file {self.local_results_file}")

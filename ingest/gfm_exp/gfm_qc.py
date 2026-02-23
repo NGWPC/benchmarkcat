@@ -1,0 +1,567 @@
+"""
+OWP QC grading and HUC-level metrics for GFM scenes.
+
+Implements the GFM Eval Metrics methodology with dynamic metadata handling:
+per-HUC reliability (Data Quality Grade A/B/C/D), severity (Impact Score),
+and scene-level aggregation. Uses mosaic-then-clip to avoid double-counting
+when HUCs cross tile boundaries.
+"""
+
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import yaml
+
+logger = logging.getLogger(__name__)
+
+_QC_CONFIG_PATH = Path(__file__).parent / "qc_config.yaml"
+
+
+def load_qc_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load QC grading and impact criteria from a YAML file.
+
+    Args:
+        config_path: Path to a YAML config file. Defaults to the bundled qc_config.yaml.
+
+    Returns:
+        Dict with "version", "grading", and "impact" keys.
+    """
+    path = config_path or _QC_CONFIG_PATH
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+_QC_CONFIG = load_qc_config()
+
+import geopandas as gpd
+import numpy as np
+import rasterio
+from rasterio.features import geometry_mask
+from rasterio.merge import merge
+from shapely import Geometry
+
+REQUIRED_LAYERS = [
+    "ENSEMBLE_FLOOD",
+    "ENSEMBLE_UNCERTAINTY",
+    "ENSEMBLE_EXCLAYER",
+    "ENSEMBLE_OBSWATER",
+    "ADVFLAG",
+    "POP",
+]
+
+# PUM Reference: 1 pixel = 20m * 20m = 0.0004 km2
+# We use this for the area calculation formula.
+REF_KM2_PER_PIXEL = 0.0004
+
+# Fallback nodata value for uint8 rasters when metadata is missing
+DEFAULT_NODATA = 255
+
+def _resolve_all_tile_keys(
+    s3_utils: Any,
+    bucket_name: str,
+    sent_ti_path: str,
+    equi7tiles: List[str],
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """Resolve S3 keys for all required layers across all tiles in a single S3 call.
+
+    Makes one list_resources_with_string call for all tiles and partitions the
+    results client-side, reducing N ListObjects API calls to 1.
+
+    Args:
+        s3_utils: S3 utilities object with list_resources_with_string.
+        bucket_name: S3 bucket name.
+        sent_ti_path: S3 prefix for the scene.
+        equi7tiles: List of equi7 tile ids.
+
+    Returns:
+        Dict mapping tile id to {layer_name: s3_key_or_None}.
+    """
+    try:
+        all_keys = s3_utils.list_resources_with_string(
+            bucket_name, sent_ti_path, equi7tiles
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to list S3 resources for tiles %s: %s",
+            equi7tiles,
+            e,
+            exc_info=False,
+        )
+        return {tile: {ly: None for ly in REQUIRED_LAYERS} for tile in equi7tiles}
+
+    result = {}
+    for tile in equi7tiles:
+        tile_keys = [k for k in all_keys if tile in k]
+        tile_result = {}
+        for layer in REQUIRED_LAYERS:
+            found = [k for k in tile_keys if layer in k]
+            raster_found = [k for k in found if k.lower().endswith((".tif", ".tiff"))]
+            tile_result[layer] = raster_found[0] if raster_found else None
+            if found and not raster_found:
+                logger.debug(
+                    "No .tif/.tiff key for layer %s (tile %s); only non-raster keys matched.",
+                    layer,
+                    tile,
+                )
+        result[tile] = tile_result
+    return result
+
+def _check_scene_completeness_from_keys(
+    all_tile_keys: Dict[str, Dict[str, Optional[str]]],
+) -> bool:
+    """Check whether at least one tile has all required layer files present.
+
+    Uses pre-resolved keys to avoid redundant S3 API calls. Files are validated
+    when rasterio.open() is called during mosaic building.
+
+    Args:
+        all_tile_keys: Dict mapping tile id to {layer: s3_key_or_None}.
+
+    Returns:
+        True if at least one tile has all REQUIRED_LAYERS with non-None keys.
+    """
+    for tile, keys in all_tile_keys.items():
+        if all(keys.get(ly) for ly in REQUIRED_LAYERS):
+            return True
+    return False
+
+def _get_raster_metadata(file_path: str) -> Optional[Dict[str, Any]]:
+    """Read CRS, nodata, and resolution from a raster file.
+
+    Args:
+        file_path: Path to a GeoTIFF (local).
+
+    Returns:
+        Dict with keys "crs", "nodata", "res" (x_res, y_res in units of CRS),
+        or None if the file cannot be opened.
+    """
+    try:
+        with rasterio.open(file_path) as src:
+            return {
+                "crs": src.crs,
+                "nodata": src.nodata,
+                "res": src.res,
+            }
+    except (rasterio.RasterioIOError, OSError) as e:
+        logger.warning("Failed to read raster metadata from %s: %s", file_path, e)
+        return None
+
+def _get_mosaic_only(
+    layer_name: str,
+    tile_files: Dict[str, str],
+    detected_nodata: Optional[Union[int, float]],
+) -> Optional[Tuple[np.ndarray, Any, Any, Optional[Union[int, float]]]]:
+    """Build the full mosaic for one layer (open tiles, merge); no HUC mask.
+
+    Args:
+        layer_name: Layer identifier for logging (e.g. ENSEMBLE_FLOOD).
+        tile_files: Dict mapping tile id to path (local or S3 URI) for this layer.
+        detected_nodata: Nodata value for merge.
+
+    Returns:
+        (mosaic_ndarray, out_trans, crs, nodata) or None on failure.
+        Mosaic has shape (count, height, width) from rasterio.merge.merge.
+    """
+    src_files_to_mosaic = []
+    files_to_close = []
+    work_nodata = detected_nodata if detected_nodata is not None else DEFAULT_NODATA
+
+    try:
+        for fpath in tile_files.values():
+            try:
+                src = rasterio.open(fpath)
+                files_to_close.append(src)
+                src_files_to_mosaic.append(src)
+            except (rasterio.RasterioIOError, OSError) as e:
+                logger.debug("Could not open %s for mosaic: %s", fpath, e)
+                continue
+
+        if not src_files_to_mosaic:
+            return None
+
+        mosaic, out_trans = merge(src_files_to_mosaic, nodata=work_nodata)
+        crs = src_files_to_mosaic[0].crs
+        return (mosaic, out_trans, crs, work_nodata)
+    except (rasterio.RasterioIOError, OSError, MemoryError) as e:
+        logger.warning("Error processing mosaic for %s: %s", layer_name, e)
+        return None
+    except Exception as e:
+        logger.warning("Unexpected error processing mosaic for %s: %s", layer_name, e)
+        return None
+    finally:
+        for src in files_to_close:
+            src.close()
+
+
+def _mask_mosaic_to_geometry(
+    mosaic: np.ndarray,
+    transform: Any,
+    crs: Any,
+    nodata: Optional[Union[int, float]],
+    geom: Geometry,
+) -> Optional[np.ndarray]:
+    """Mask a prebuilt mosaic to one geometry; return first band with pixels outside geometry set to nodata.
+
+    Uses rasterio.features.geometry_mask() for direct numpy-level masking,
+    avoiding the overhead of writing the full mosaic to a MemoryFile per HUC.
+
+    Args:
+        mosaic: Mosaic array (count, height, width).
+        transform: Affine transform for the mosaic.
+        crs: CRS of the mosaic.
+        nodata: Nodata value.
+        geom: Shapely geometry in the same CRS as the mosaic.
+
+    Returns:
+        First band of masked array (HUC clip), or None if mask fails.
+    """
+    work_nodata = nodata if nodata is not None else DEFAULT_NODATA
+    try:
+        # geometry_mask returns True where pixels are OUTSIDE the geometry
+        outside_mask = geometry_mask(
+            [geom.__geo_interface__],
+            out_shape=(mosaic.shape[1], mosaic.shape[2]),
+            transform=transform,
+        )
+        # If geometry doesn't overlap mosaic at all, every pixel is outside
+        if outside_mask.all():
+            return None
+        band = mosaic[0].copy()
+        band[outside_mask] = work_nodata
+        return band
+    except (ValueError, MemoryError) as e:
+        logger.debug("Mask failed (geometry may not overlap mosaic): %s", e)
+        return None
+
+
+def _metrics_from_layer_arrays(
+    flood_arr: Optional[np.ndarray],
+    unc_arr: Optional[np.ndarray],
+    excl_arr: Optional[np.ndarray],
+    adv_arr: Optional[np.ndarray],
+    pop_arr: Optional[np.ndarray],
+    obs_water_arr: Optional[np.ndarray],
+    detected_nodata: Optional[Union[int, float]],
+    metadata: Dict[str, Any],
+    sent_ti_path: str,
+) -> Dict[str, Any]:
+    """Compute per-HUC metrics from the six layer arrays (masked to HUC).
+
+    Args:
+        flood_arr, unc_arr, excl_arr, adv_arr, pop_arr, obs_water_arr: Masked
+            arrays for each layer; any may be None.
+        detected_nodata: Nodata value for the rasters.
+        metadata: Dict with "crs" (for WGS84 warning).
+        sent_ti_path: Scene path for logging.
+
+    Returns:
+        Dict with flood_area_km2, uncertainty_mean, observability_pct,
+        advisory_noise_pct, affected_pop, normalized_anomaly_ratio (and defaults).
+    """
+    metrics = {
+        "flood_area_km2": 0.0,
+        "affected_pop": 0.0,
+        "observability_pct": 0.0,
+        "uncertainty_mean": 0.0,
+        "advisory_noise_pct": 0.0,
+        "normalized_anomaly_ratio": 0.0,
+    }
+
+    if flood_arr is None:
+        return metrics
+
+    work_nodata = detected_nodata if detected_nodata is not None else DEFAULT_NODATA
+    valid_mask = (flood_arr != work_nodata)
+    flood_pixels = (flood_arr == 1) & valid_mask
+    flood_count = np.sum(flood_pixels)
+    total_valid_pixels = np.sum(valid_mask)
+
+    try:
+        if metadata.get("crs") is not None and metadata["crs"].to_epsg() == 4326:
+            logger.warning(
+                "Scene %s appears to be WGS84. Area calcs using %s km2 constant may be invalid.",
+                sent_ti_path,
+                REF_KM2_PER_PIXEL,
+            )
+    except (AttributeError, TypeError):
+        pass
+
+    metrics["flood_area_km2"] = flood_count * REF_KM2_PER_PIXEL
+
+    if unc_arr is not None and flood_count > 0 and unc_arr.shape == flood_arr.shape:
+        unc_values = unc_arr[flood_pixels]
+        if unc_values.size > 0:
+            metrics["uncertainty_mean"] = float(np.mean(unc_values))
+
+    if excl_arr is not None and total_valid_pixels > 0 and excl_arr.shape == flood_arr.shape:
+        excl_pixels = (excl_arr == 1) & valid_mask
+        excl_count = np.sum(excl_pixels)
+        metrics["observability_pct"] = (1 - (excl_count / total_valid_pixels)) * 100.0
+
+    if adv_arr is not None and flood_count > 0 and adv_arr.shape == flood_arr.shape:
+        noisy_flood = flood_pixels & (adv_arr > 0)
+        metrics["advisory_noise_pct"] = (np.sum(noisy_flood) / flood_count) * 100.0
+
+    if pop_arr is not None and pop_arr.shape == flood_arr.shape:
+        pop_valid = (pop_arr != work_nodata) & flood_pixels
+        metrics["affected_pop"] = float(np.sum(pop_arr[pop_valid]))
+
+    if obs_water_arr is not None and obs_water_arr.shape == flood_arr.shape:
+        obs_water_count = np.sum((obs_water_arr == 1) & valid_mask)
+        if obs_water_count > 0:
+            metrics["normalized_anomaly_ratio"] = float(flood_count / obs_water_count)
+
+    metrics["flood_area_km2"] = round(metrics["flood_area_km2"], 4)
+    metrics["uncertainty_mean"] = round(metrics["uncertainty_mean"], 2)
+    metrics["observability_pct"] = round(metrics["observability_pct"], 2)
+    metrics["advisory_noise_pct"] = round(metrics["advisory_noise_pct"], 2)
+    metrics["affected_pop"] = int(metrics["affected_pop"])
+    metrics["normalized_anomaly_ratio"] = round(metrics["normalized_anomaly_ratio"], 4)
+    return metrics
+
+def _grade_qc(
+    data_complete: bool,
+    metrics: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Assign Data Quality Grade A/B/C/D using thresholds from config.
+
+    Args:
+        data_complete: True if all required layer files are present for the scene.
+        metrics: Per-HUC metrics (observability_pct, advisory_noise_pct, etc.).
+        config: QC config dict (uses module-level _QC_CONFIG if None).
+
+    Returns:
+        "A", "B", "C", or "D".
+    """
+    cfg = (config or _QC_CONFIG)["grading"]
+    if not data_complete:
+        return "D"
+    obs = metrics.get("observability_pct", 0.0)
+    noise = metrics.get("advisory_noise_pct", 0.0)
+    unc = metrics.get("uncertainty_mean", 0.0)
+    flood_signal = (metrics.get("flood_area_km2", 0.0) or 0.0) > 0
+
+    d = cfg["D_floor"]
+    if obs < d["observability_pct_lt"] or noise > d["advisory_noise_pct_gt"]:
+        return "D"
+    a = cfg["A"]
+    if unc > a["uncertainty_mean_gt"] and obs > a["observability_pct_gt"] and noise < a["advisory_noise_pct_lt"]:
+        return "A"
+    b = cfg["B"]
+    if unc > b["uncertainty_mean_gt"] and obs > b["observability_pct_gt"] and noise < b["advisory_noise_pct_lt"]:
+        return "B"
+    if flood_signal:
+        return "C"
+    return "D"
+
+def _impact_score(
+    flood_area: float,
+    pop: float,
+    config: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Assign Impact Score (High/Medium/Low) from flood area and affected population.
+
+    Args:
+        flood_area: Total flood area in km².
+        pop: Affected population count.
+        config: QC config dict (uses module-level _QC_CONFIG if None).
+
+    Returns:
+        "High", "Medium", or "Low".
+    """
+    cfg = (config or _QC_CONFIG)["impact"]
+    high = cfg["High"]
+    if pop > high["affected_pop_gt"] or flood_area > high["flood_area_km2_gt"]:
+        return "High"
+    med = cfg["Medium"]
+    if pop > med["affected_pop_gt"] or flood_area > med["flood_area_km2_gt"]:
+        return "Medium"
+    return "Low"
+
+def compute_scene_qc(
+    huc8_list: List[str],
+    hucs_gdf: gpd.GeoDataFrame,
+    sent_ti_path: str,
+    equi7tiles_list: List[str],
+    bucket_name: str,
+    s3_utils: Any,
+) -> Dict[str, Any]:
+    """Compute OWP QC properties for a GFM scene (per-HUC metrics, grades, scene aggregation).
+
+    Args:
+        huc8_list: List of HUC8 ids that intersect the scene.
+        hucs_gdf: GeoDataFrame with HUC8 column and geometry (CRS must be set).
+        sent_ti_path: S3 prefix for the scene (e.g. benchmark/rs/PI4/date/sent_ti/).
+        equi7tiles_list: List of equi7tile ids in the scene.
+        bucket_name: S3 bucket name.
+        s3_utils: S3 utilities (list_resources_with_string, s3_client, download_file).
+
+    Returns:
+        Dict to merge into STAC item properties: owp:qc_grade, owp:impact_score,
+        owp:active_hucs, owp:total_flood_area_km2, owp:huc_summaries.
+    """
+    if not huc8_list or not equi7tiles_list:
+        return _empty_owp_properties()
+
+    # Pass CRS info to HUC GDF just in case it's missing (assuming 4326)
+    if hucs_gdf.crs is None:
+        logger.warning("HUC GeoDataFrame has no CRS. Assuming EPSG:4326.")
+        hucs_gdf.set_crs("EPSG:4326", inplace=True)
+
+    # Resolve S3 keys for all tiles in a single S3 API call
+    all_tile_keys = _resolve_all_tile_keys(s3_utils, bucket_name, sent_ti_path, equi7tiles_list)
+
+    scene_data_complete = _check_scene_completeness_from_keys(all_tile_keys)
+
+    huc_summaries = []
+    total_flood_area_km2 = 0.0
+
+    grade_rank = {"A": 4, "B": 3, "C": 2, "D": 1}
+    impact_rank = {"High": 3, "Medium": 2, "Low": 1}
+    scene_best_grade = "D"
+    scene_highest_impact = "Low"
+    active_hucs = []
+
+    # Build S3 URIs from pre-resolved keys
+    local_paths = {ly: {} for ly in REQUIRED_LAYERS}
+    metadata = None
+    for tile, keys in all_tile_keys.items():
+        if not keys["ENSEMBLE_FLOOD"]:
+            continue
+        for layer, key in keys.items():
+            if key:
+                local_paths[layer][tile] = f"s3://{bucket_name}/{key}"
+        if metadata is None and local_paths["ENSEMBLE_FLOOD"].get(tile):
+            metadata = _get_raster_metadata(local_paths["ENSEMBLE_FLOOD"][tile])
+            if metadata is None:
+                logger.debug(
+                    "Could not read raster metadata from %s",
+                    local_paths["ENSEMBLE_FLOOD"][tile],
+                )
+
+    if metadata is None:
+        logger.debug("No valid flood raster metadata for scene %s", sent_ti_path)
+        return _empty_owp_properties()
+
+    try:
+        if metadata["crs"] is not None and metadata["crs"].to_epsg() == 4326:
+            logger.warning(
+                "Scene %s appears to be WGS84. Area calcs using %s km2 constant may be invalid.",
+                sent_ti_path,
+                REF_KM2_PER_PIXEL,
+            )
+    except (AttributeError, TypeError):
+        pass
+
+    detected_nodata = metadata["nodata"] if metadata["nodata"] is not None else DEFAULT_NODATA
+    raster_crs = metadata["crs"]
+
+    # Build mosaics once per layer (scene-level)
+    mosaics = {}
+    for layer in REQUIRED_LAYERS:
+        result = _get_mosaic_only(layer, local_paths[layer], detected_nodata)
+        mosaics[layer] = result
+
+    # Pre-index HUC8 geometries to avoid repeated DataFrame scans
+    huc8_str_col = hucs_gdf["HUC8"].astype(str)
+    huc_geometry_lookup = {}
+    for huc8_id in huc8_list:
+        rows = hucs_gdf[huc8_str_col == str(huc8_id)]
+        if not rows.empty:
+            geom = rows.geometry.iloc[0]
+            if geom is not None and not geom.is_empty:
+                huc_geometry_lookup[str(huc8_id)] = geom
+
+    # Per-HUC: mask prebuilt mosaics and compute metrics
+    for huc8_id in huc8_list:
+        huc_geom = huc_geometry_lookup.get(str(huc8_id))
+        if huc_geom is None:
+            continue
+
+        try:
+            huc_gdf = gpd.GeoDataFrame(geometry=[huc_geom], crs=hucs_gdf.crs)
+            huc_projected = huc_gdf.to_crs(raster_crs).geometry.iloc[0]
+            if huc_projected.is_empty:
+                continue
+        except Exception as e:
+            logger.debug("CRS/projection error for HUC %s: %s", huc8_id, e)
+            continue
+
+        flood_arr = None
+        unc_arr = None
+        excl_arr = None
+        adv_arr = None
+        pop_arr = None
+        obs_water_arr = None
+        if mosaics["ENSEMBLE_FLOOD"]:
+            mosaic, trans, crs, nodata = mosaics["ENSEMBLE_FLOOD"]
+            flood_arr = _mask_mosaic_to_geometry(mosaic, trans, crs, nodata, huc_projected)
+        if mosaics["ENSEMBLE_UNCERTAINTY"]:
+            mosaic, trans, crs, nodata = mosaics["ENSEMBLE_UNCERTAINTY"]
+            unc_arr = _mask_mosaic_to_geometry(mosaic, trans, crs, nodata, huc_projected)
+        if mosaics["ENSEMBLE_EXCLAYER"]:
+            mosaic, trans, crs, nodata = mosaics["ENSEMBLE_EXCLAYER"]
+            excl_arr = _mask_mosaic_to_geometry(mosaic, trans, crs, nodata, huc_projected)
+        if mosaics["ADVFLAG"]:
+            mosaic, trans, crs, nodata = mosaics["ADVFLAG"]
+            adv_arr = _mask_mosaic_to_geometry(mosaic, trans, crs, nodata, huc_projected)
+        if mosaics["POP"]:
+            mosaic, trans, crs, nodata = mosaics["POP"]
+            pop_arr = _mask_mosaic_to_geometry(mosaic, trans, crs, nodata, huc_projected)
+        if mosaics["ENSEMBLE_OBSWATER"]:
+            mosaic, trans, crs, nodata = mosaics["ENSEMBLE_OBSWATER"]
+            obs_water_arr = _mask_mosaic_to_geometry(mosaic, trans, crs, nodata, huc_projected)
+
+        metrics = _metrics_from_layer_arrays(
+            flood_arr, unc_arr, excl_arr, adv_arr, pop_arr, obs_water_arr,
+            detected_nodata, metadata, sent_ti_path,
+        )
+
+        grade = _grade_qc(scene_data_complete, metrics)
+        impact = _impact_score(metrics["flood_area_km2"], metrics["affected_pop"])
+
+        huc_summaries.append({
+            "huc8_id": str(huc8_id),
+            "qc_grade": grade,
+            "impact": impact,
+            "metrics": metrics,
+        })
+
+        total_flood_area_km2 += metrics["flood_area_km2"]
+
+        if grade_rank[grade] > grade_rank[scene_best_grade]:
+            scene_best_grade = grade
+        if impact_rank[impact] > impact_rank[scene_highest_impact]:
+            scene_highest_impact = impact
+        if grade in ("A", "B"):
+            active_hucs.append(str(huc8_id))
+
+    return {
+        "owp:qc_grade": scene_best_grade,
+        "owp:impact_score": scene_highest_impact,
+        "owp:active_hucs": active_hucs,
+        "owp:total_flood_area_km2": round(total_flood_area_km2, 4),
+        "owp:huc_summaries": huc_summaries,
+        "owp:qc_criteria": {
+            "version": _QC_CONFIG["version"],
+            "grading": _QC_CONFIG["grading"],
+            "impact": _QC_CONFIG["impact"],
+        },
+    }
+
+def _empty_owp_properties() -> Dict[str, Any]:
+    """Return minimal OWP properties when QC cannot be computed (e.g. no HUCs or tiles)."""
+    return {
+        "owp:qc_grade": "D",
+        "owp:impact_score": "Low",
+        "owp:active_hucs": [],
+        "owp:total_flood_area_km2": 0.0,
+        "owp:huc_summaries": [],
+        "owp:qc_criteria": {
+            "version": _QC_CONFIG["version"],
+            "grading": _QC_CONFIG["grading"],
+            "impact": _QC_CONFIG["impact"],
+        },
+    }

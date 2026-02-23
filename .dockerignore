@@ -1,0 +1,32 @@
+# Version control
+.git
+.gitignore
+
+# Python caches
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+**/__pycache__
+**/*.pyc
+
+# Local parquet / cache artifacts
+cache/
+logs/
+*.parquet
+*.gpkg
+
+test-data/
+README.md
+schemas/
+scripts/
+stac/
+
+# Local STAC output
+*.json
+
+# Editor / OS
+.DS_Store
+*.swp
+.venv
+venv/
