@@ -643,18 +643,21 @@ Each entry in `owp:huc_summaries` has this structure:
 | `metrics.affected_pop` | int | Sum of population raster values over flooded pixels |
 | `metrics.normalized_anomaly_ratio` | float | Ratio of flood pixels to observed-water pixels |
 
-#### Grading Thresholds
+#### [The QC Configuration file](ingest/gfm_exp/qc_config.yaml) sets the thresholds values listed below.
+
+##### Grading Thresholds (version 1.0)
 
 - **Grade A**: uncertainty > 75, observability > 80%, advisory noise < 5%
 - **Grade B**: uncertainty > 60, observability > 60%, advisory noise < 20%
 - **Grade C**: flood signal present but metrics below B thresholds
 - **Grade D**: incomplete data, observability < 50%, or advisory noise > 50%
 
-#### Impact Thresholds
+##### Impact Thresholds (version 1.0)
 
 - **High**: affected population > 100 or flood area > 5 km²
 - **Medium**: affected population > 10 or flood area > 1 km²
 - **Low**: below Medium thresholds
+
 
 ## Shared Utilities
 
