@@ -162,43 +162,185 @@
                       ]
                     }
                   ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "owp:qc_grade": {
+                      "title": "OWP Quality Control Grade",
+                      "type": "string",
+                      "enum": ["A", "B", "C", "D"],
+                      "description": "Overall quality grade for the flood observation based on observability, uncertainty, and advisory flags."
+                    },
+                    "owp:impact_score": {
+                      "title": "OWP Impact Score",
+                      "type": "string",
+                      "enum": ["High", "Medium", "Low"],
+                      "description": "Impact classification based on flood area and affected population."
+                    },
+                    "owp:active_hucs": {
+                      "title": "OWP Active HUCs",
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[0-9]{8}$"
+                      },
+                      "description": "List of HUC8 watershed identifiers with significant flood activity (High impact and B grade or better)."
+                    },
+                    "owp:total_flood_area_km2": {
+                      "title": "OWP Total Flood Area",
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Total flood area across all HUC8 watersheds in square kilometers."
+                    },
+                    "owp:huc_summaries": {
+                      "title": "OWP HUC Summaries",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["huc8_id", "qc_grade", "impact", "metrics"],
+                        "properties": {
+                          "huc8_id": {
+                            "type": "string",
+                            "pattern": "^[0-9]{8}$",
+                            "description": "8-digit HUC watershed identifier"
+                          },
+                          "qc_grade": {
+                            "type": "string",
+                            "enum": ["A", "B", "C", "D"],
+                            "description": "Quality grade for this HUC"
+                          },
+                          "impact": {
+                            "type": "string",
+                            "enum": ["High", "Medium", "Low"],
+                            "description": "Impact classification for this HUC"
+                          },
+                          "metrics": {
+                            "type": "object",
+                            "required": [
+                              "flood_area_km2",
+                              "affected_pop",
+                              "observability_pct",
+                              "uncertainty_mean",
+                              "advisory_noise_pct",
+                              "normalized_anomaly_ratio"
+                            ],
+                            "properties": {
+                              "flood_area_km2": {
+                                "type": "number",
+                                "minimum": 0,
+                                "description": "Flood area in this HUC in square kilometers"
+                              },
+                              "affected_pop": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Estimated affected population count"
+                              },
+                              "observability_pct": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 100,
+                                "description": "Percentage of HUC area with valid observations"
+                              },
+                              "uncertainty_mean": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 100,
+                                "description": "Mean uncertainty/likelihood value in flooded areas"
+                              },
+                              "advisory_noise_pct": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 100,
+                                "description": "Percentage of flood area with advisory flags set"
+                              },
+                              "normalized_anomaly_ratio": {
+                                "type": "number",
+                                "minimum": 0,
+                                "description": "Ratio of flood area to total HUC area, normalized"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "description": "Per-HUC quality metrics and impact assessment."
+                    },
+                    "owp:qc_criteria": {
+                      "title": "OWP QC Criteria",
+                      "type": "object",
+                      "required": ["version", "grading", "impact"],
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "Version of the QC criteria schema"
+                        },
+                        "grading": {
+                          "type": "object",
+                          "description": "Thresholds for quality grade assignment",
+                          "properties": {
+                            "D_floor": {
+                              "type": "object",
+                              "description": "Minimum criteria - below this is grade D"
+                            },
+                            "A": {
+                              "type": "object",
+                              "description": "Criteria for grade A (highest quality)"
+                            },
+                            "B": {
+                              "type": "object",
+                              "description": "Criteria for grade B"
+                            }
+                          }
+                        },
+                        "impact": {
+                          "type": "object",
+                          "description": "Thresholds for impact classification",
+                          "properties": {
+                            "High": {
+                              "type": "object",
+                              "description": "Criteria for High impact"
+                            },
+                            "Medium": {
+                              "type": "object",
+                              "description": "Criteria for Medium impact"
+                            }
+                          }
+                        }
+                      },
+                      "description": "Quality control grading criteria and impact thresholds used for this item."
+                    }
+                  }
                 }
               ]
             },
             "sat:orbit_state": {
               "title": "Satellite Orbit State",
               "type": "string",
-              "description": "Either ascending or descending.",
-              "required": true
+              "description": "Either ascending or descending."
             },
             "sat:relative_orbit": {
               "title": "Relative Orbit Number",
               "type": "integer",
-              "description": "The relative orbit number at the time of acquisition. Using the relative orbit number associated with the earliest acquired tile in the item.",
-              "required": true
+              "description": "The relative orbit number at the time of acquisition. Using the relative orbit number associated with the earliest acquired tile in the item."
             },
             "start_datetime": {
               "title": "Start Datetime",
               "type": "string",
-              "description": "The start time of acquisition for all the tiles associated with the event. Finer grained capture times will be included at the asset level.",
-              "required": true
+              "description": "The start time of acquisition for all the tiles associated with the event. Finer grained capture times will be included at the asset level."
             },
             "end_datetime": {
               "title": "End Datetime",
               "type": "string",
-              "description": "The end time of acquisition for all the tiles associated with the event. Finer grained capture times will be included at the asset level.",
-              "required": true
+              "description": "The end time of acquisition for all the tiles associated with the event. Finer grained capture times will be included at the asset level."
             },
             "version": {
               "title": "Version",
               "type": "string",
-              "description": "Use the version extension to indicate the version of the GFM product associated with this product being used. Since right now all the layers for a given tileset will be coming from the same version this can be at the item level.",
-              "required": false
+              "description": "Use the version extension to indicate the version of the GFM product associated with this product being used. Since right now all the layers for a given tileset will be coming from the same version this can be at the item level."
             },
             "layers": {
               "type": "object",
               "description": "This is an object obtained using the layer file. It will specify the id of the asset and then give the label values and color mapping for each layer.",
-              "required": true,
               "properties": {
                 "observed_flood_extent": {
                   "title": "Observed Flood Extent",
@@ -377,8 +519,7 @@
             "license": {
               "title": "License",
               "type": "string",
-              "description": "CC-BY-4.0 (recording GFM SPDX license identifier here)",
-              "required": true
+              "description": "CC-BY-4.0 (recording GFM SPDX license identifier here)"
             }
           }
         }
