@@ -28,7 +28,11 @@ RUN pip3 install --no-cache-dir --upgrade pip \
 COPY ingest/ ./ingest/
 RUN pip3 install --no-cache-dir -e .
 
+# Entrypoint translates cloud-provider array-job index env vars (AWS_BATCH_JOB_ARRAY_INDEX,
+# AZ_BATCH_TASK_ID, BATCH_TASK_INDEX) into --job-index so application code stays cloud-agnostic.
 # Examples:
 #   gfm:     docker run <image> ingest.gfm.gfm_col --bucket_name fimc-data ...
 #   gfm_exp: docker run <image> ingest.gfm_exp.gfm_exp_col --bucket_name fimc-data ...
-ENTRYPOINT ["python3", "-m"]
+COPY ./scripts/batch-entrypoint.sh ./
+RUN chmod +x batch-entrypoint.sh
+ENTRYPOINT ["./batch-entrypoint.sh"]

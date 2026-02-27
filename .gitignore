@@ -9,3 +9,10 @@ __pycache__
 
 test-data/
 stac/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars

@@ -121,7 +121,7 @@ def parse_arguments():
         "--job-index",
         type=int,
         default=None,
-        help="Array job index; defaults to AWS_BATCH_JOB_ARRAY_INDEX env var, then 0.",
+        help="Array job index (0-based). Set by entrypoint.sh from the cloud provider's env var.",
     )
     parser.add_argument(
         "--scenes-per-job",
@@ -639,9 +639,7 @@ def main_batch_worker(args):
     if not args.partial_parquet_prefix:
         raise ValueError("--partial-parquet-prefix is required in batch-worker mode")
 
-    job_index = args.job_index
-    if job_index is None:
-        job_index = int(os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX", "0"))
+    job_index = args.job_index if args.job_index is not None else 0
 
     if getattr(args, "profile", None):
         os.environ["AWS_PROFILE"] = args.profile
