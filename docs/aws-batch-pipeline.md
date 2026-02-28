@@ -11,7 +11,7 @@ Scale GFM and GFM Expanded ingestion to tens of thousands of scenes using a 3-ph
 | `terraform/terraform.tfvars.example` | Template with placeholder values for new setups |
 | `scripts/build_and_push.sh` | Build Docker image and push to ECR; reads `aws_account_id`, `aws_region`, `aws_profile` from terraform outputs (falls back to env vars) |
 | `scripts/submit_pipeline.py` | Python orchestrator — submits split → workers → merge with polling |
-| `scripts/batch-entrypoint.sh` | Cloud-agnostic entrypoint; injects `--job-index` from `AWS_BATCH_JOB_ARRAY_INDEX`, `AZ_BATCH_TASK_ID`, or `BATCH_TASK_INDEX` |
+| `scripts/batch-entrypoint.sh` | Cloud-agnostic entrypoint; injects `--job-index` from `AWS_BATCH_JOB_ARRAY_INDEX`, `AZ_BATCH_TASK_ID`, or `BATCH_TASK_INDEX`; converts optional env vars `AFTER_DATE`, `BEFORE_DATE`, `DATES` into `--after-date`, `--before-date`, `--dates` for the split job when set |
 
 ---
 
@@ -178,7 +178,7 @@ python scripts/submit_pipeline.py [options]
 | `--poll-interval` | `30` | Seconds between status polls |
 | `--dry-run` | false | Print what would be submitted without submitting |
 
-Date filters apply **only to Phase 1 (split)**. Workers process their manifest slice as-is; they do not re-apply date filters. A sidecar `<manifest>.meta.json` is written with `total_scenes` and any active filters for auditing.
+Date filters apply **only to Phase 1 (split)**. They are passed to the split job via container environment (not Batch parameters), so they can be omitted when not needed; the entrypoint converts them to CLI args when set. Workers process their manifest slice as-is; they do not re-apply date filters. A sidecar `<manifest>.meta.json` is written with `total_scenes` and any active filters for auditing.
 
 **Single source of truth:** Terraform is the source of truth for infrastructure and config. CLI overrides apply to: `--bucket-name`, `--scenes-per-job`, `--profile`, `--region`, `--project-name`, and date filters. S3 paths (`catalog_path`, `manifest_s3_key`, etc.) come only from Terraform — change them in `terraform.tfvars` and run `terraform apply`.
 
