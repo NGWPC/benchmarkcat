@@ -8,12 +8,31 @@ set -o pipefail
 # Usage:
 #   ./scripts/build_and_push.sh
 #
-# Gets ECR URL from terraform output. Override with ECR_REPO env var.
+# Reads aws_account_id, aws_region, aws_profile from terraform outputs.
+# Falls back to AWS_ACCOUNT_ID, AWS_REGION, AWS_PROFILE env vars.
+# Override ECR URL with ECR_REPO env var.
 # ---------------------------------------------------------------------------
 
-AWS_PROFILE=${AWS_PROFILE:-test-se}
-AWS_REGION=${AWS_REGION:-us-east-1}
-AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID:-591210920133}
+# Read from terraform outputs first, then env vars (no hardcoded defaults)
+if [ -d "terraform" ] && command -v terraform &>/dev/null; then
+  _tf_account=$(cd terraform && terraform output -raw aws_account_id 2>/dev/null) || true
+  _tf_region=$(cd terraform && terraform output -raw aws_region 2>/dev/null) || true
+  _tf_profile=$(cd terraform && terraform output -raw aws_profile 2>/dev/null) || true
+  [ -n "$_tf_account" ] && AWS_ACCOUNT_ID="$_tf_account"
+  [ -n "$_tf_region" ] && AWS_REGION="$_tf_region"
+  [ -n "$_tf_profile" ] && AWS_PROFILE="$_tf_profile"
+fi
+
+# Require terraform or env vars
+missing=""
+[ -z "$AWS_ACCOUNT_ID" ] && missing="${missing}AWS_ACCOUNT_ID "
+[ -z "$AWS_REGION" ] && missing="${missing}AWS_REGION "
+[ -z "$AWS_PROFILE" ] && missing="${missing}AWS_PROFILE "
+if [ -n "$missing" ]; then
+  echo "ERROR: Missing: $missing" >&2
+  echo "Run 'cd terraform && terraform init && terraform apply' or set env vars." >&2
+  exit 1
+fi
 
 # Get ECR repo URL from terraform or env var
 if [ -n "$ECR_REPO" ]; then
@@ -24,7 +43,8 @@ fi
 
 if [ -z "$ECR_REPO" ]; then
   # Fallback: construct from account ID and project name
-  PROJECT_NAME=${PROJECT_NAME:-benchmarkcat}
+  _tf_project=$(cd terraform && terraform output -raw project_name 2>/dev/null) || true
+  PROJECT_NAME=${_tf_project:-${PROJECT_NAME:-benchmarkcat}}
   ECR_REPO="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}"
   echo "Using constructed ECR URL: $ECR_REPO"
 else

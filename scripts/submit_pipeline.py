@@ -25,38 +25,6 @@ from datetime import datetime, timezone
 import boto3
 
 
-# ---------------------------------------------------------------------------
-# Defaults (used when terraform outputs are unavailable)
-# ---------------------------------------------------------------------------
-DEFAULTS = {
-    "aws_region": "us-east-1",
-    "aws_profile": "test-se",
-    "s3_bucket": "fimc-data",
-    "scenes_per_job": 50,
-    "catalog_path": "benchmark/stac-bench-cat/",
-    "hucs_object_key": "benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg",
-    "boundaries_object_key": "benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg",
-    "job_queue_name": "benchmarkcat-queue",
-    "gfm": {
-        "split_job_def": "benchmarkcat-gfm-split",
-        "worker_job_def": "benchmarkcat-gfm-worker",
-        "merge_job_def": "benchmarkcat-gfm-merge",
-        "asset_object_key": "benchmark/rs/gfm/",
-        "manifest_s3_key": "benchmark/stac-bench-cat/batch/gfm_manifest.jsonl",
-        "partial_parquet_prefix": "benchmark/stac-bench-cat/batch/gfm_partials",
-        "derived_metadata_path": "benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet",
-    },
-    "gfm_exp": {
-        "split_job_def": "benchmarkcat-gfm-exp-split",
-        "worker_job_def": "benchmarkcat-gfm-exp-worker",
-        "merge_job_def": "benchmarkcat-gfm-exp-merge",
-        "asset_object_key": "benchmark/rs/PI4/",
-        "manifest_s3_key": "benchmark/stac-bench-cat/batch/gfm_exp_manifest.jsonl",
-        "partial_parquet_prefix": "benchmark/stac-bench-cat/batch/gfm_exp_partials",
-        "derived_metadata_path": "benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet",
-    },
-}
-
 MAX_ARRAY_SIZE = 10000
 MIN_ARRAY_SIZE = 2
 
@@ -84,35 +52,59 @@ def get_terraform_outputs():
     return {}
 
 
+def _require_terraform_or_exit(tf_outputs: dict) -> None:
+    """Exit with clear error if terraform outputs are unavailable."""
+    if tf_outputs:
+        return
+    print(
+        "ERROR: Terraform outputs not available. Run from repo root with terraform initialized:\n"
+        "  cd terraform && terraform init && terraform apply",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def build_config(args, tf_outputs):
-    """Merge terraform outputs, defaults, and CLI overrides into a config dict."""
+    """Merge terraform outputs and CLI overrides into a config dict.
+
+    Terraform is the single source of truth. When terraform outputs are unavailable,
+    the script exits with an error (see _require_terraform_or_exit).
+    """
     cfg = {}
 
-    cfg["aws_region"] = args.region or tf_outputs.get("aws_region") or DEFAULTS["aws_region"]
-    cfg["aws_profile"] = args.profile or DEFAULTS["aws_profile"]
-    cfg["s3_profile"] = args.s3_profile or cfg["aws_profile"]
-    cfg["s3_bucket"] = args.bucket_name or tf_outputs.get("s3_bucket") or DEFAULTS["s3_bucket"]
-    cfg["scenes_per_job"] = args.scenes_per_job or tf_outputs.get("scenes_per_job") or DEFAULTS["scenes_per_job"]
-    cfg["catalog_path"] = tf_outputs.get("catalog_path") or DEFAULTS["catalog_path"]
-    cfg["hucs_object_key"] = tf_outputs.get("hucs_object_key") or DEFAULTS["hucs_object_key"]
-    cfg["boundaries_object_key"] = tf_outputs.get("boundaries_object_key") or DEFAULTS["boundaries_object_key"]
-    cfg["job_queue_name"] = tf_outputs.get("job_queue_name") or DEFAULTS["job_queue_name"]
+    # CLI overrides take precedence; otherwise use terraform outputs
+    cfg["aws_region"] = args.region if args.region is not None else tf_outputs.get("aws_region")
+    cfg["aws_profile"] = args.profile if args.profile is not None else tf_outputs.get("aws_profile")
+    cfg["s3_profile"] = args.s3_profile if args.s3_profile is not None else cfg["aws_profile"]
+    cfg["s3_bucket"] = args.bucket_name if args.bucket_name is not None else tf_outputs.get("s3_bucket")
+    cfg["scenes_per_job"] = (
+        args.scenes_per_job if args.scenes_per_job is not None
+        else tf_outputs.get("scenes_per_job", 50)
+    )
+    cfg["project_name"] = (
+        args.project_name if args.project_name is not None
+        else tf_outputs.get("project_name")
+    )
+    cfg["catalog_path"] = tf_outputs.get("catalog_path")
+    cfg["hucs_object_key"] = tf_outputs.get("hucs_object_key")
+    cfg["boundaries_object_key"] = tf_outputs.get("boundaries_object_key")
+    cfg["job_queue_name"] = tf_outputs.get("job_queue_name")
 
     pipeline = args.pipeline
-    pipeline_defaults = DEFAULTS[pipeline]
-
-    # Pipeline-specific paths from terraform or defaults
     tf_pipeline = tf_outputs.get(f"{pipeline}_config") or {}
     job_def_names = tf_outputs.get("job_definition_names") or {}
+    project_name = cfg["project_name"] or "benchmarkcat"
+    pipeline_key = pipeline.replace("_", "-")
 
-    cfg["split_job_def"] = job_def_names.get(f"{pipeline.replace('_', '-')}-split") or pipeline_defaults["split_job_def"]
-    cfg["worker_job_def"] = job_def_names.get(f"{pipeline.replace('_', '-')}-worker") or pipeline_defaults["worker_job_def"]
-    cfg["merge_job_def"] = job_def_names.get(f"{pipeline.replace('_', '-')}-merge") or pipeline_defaults["merge_job_def"]
+    # Job def names: from terraform or derive from project_name
+    cfg["split_job_def"] = job_def_names.get(f"{pipeline_key}-split") or f"{project_name}-{pipeline_key}-split"
+    cfg["worker_job_def"] = job_def_names.get(f"{pipeline_key}-worker") or f"{project_name}-{pipeline_key}-worker"
+    cfg["merge_job_def"] = job_def_names.get(f"{pipeline_key}-merge") or f"{project_name}-{pipeline_key}-merge"
 
-    cfg["asset_object_key"] = tf_pipeline.get("asset_object_key") or pipeline_defaults["asset_object_key"]
-    cfg["manifest_s3_key"] = tf_pipeline.get("manifest_s3_key") or pipeline_defaults["manifest_s3_key"]
-    cfg["partial_parquet_prefix"] = tf_pipeline.get("partial_parquet_prefix") or pipeline_defaults["partial_parquet_prefix"]
-    cfg["derived_metadata_path"] = tf_pipeline.get("derived_metadata_path") or pipeline_defaults["derived_metadata_path"]
+    cfg["asset_object_key"] = tf_pipeline.get("asset_object_key")
+    cfg["manifest_s3_key"] = tf_pipeline.get("manifest_s3_key")
+    cfg["partial_parquet_prefix"] = tf_pipeline.get("partial_parquet_prefix")
+    cfg["derived_metadata_path"] = tf_pipeline.get("derived_metadata_path")
 
     return cfg
 
@@ -121,20 +113,13 @@ def build_config(args, tf_outputs):
 # AWS Batch helpers
 # ---------------------------------------------------------------------------
 
-def get_batch_client(profile, region):
+def get_aws_client(profile: str | None, region: str, service: str):
+    """Return a boto3 client for the given AWS service."""
     if profile:
         session = boto3.Session(profile_name=profile, region_name=region)
     else:
         session = boto3.Session(region_name=region)
-    return session.client("batch")
-
-
-def get_s3_client(profile, region):
-    if profile:
-        session = boto3.Session(profile_name=profile, region_name=region)
-    else:
-        session = boto3.Session(region_name=region)
-    return session.client("s3")
+    return session.client(service)
 
 
 def submit_job(batch_client, job_name, job_definition, job_queue, parameters,
@@ -154,7 +139,7 @@ def submit_job(batch_client, job_name, job_definition, job_queue, parameters,
     if dry_run:
         print(f"[DRY RUN] Would submit: {json.dumps(kwargs, indent=2)}")
         return None
-
+    print(f"Submitting job: {json.dumps(kwargs, indent=2)}")
     response = batch_client.submit_job(**kwargs)
     return response["jobId"]
 
@@ -210,8 +195,8 @@ def read_manifest_total(s3_client, bucket, manifest_s3_key):
 # ---------------------------------------------------------------------------
 
 def run_pipeline(args):
-    breakpoint()
     tf_outputs = get_terraform_outputs()
+    _require_terraform_or_exit(tf_outputs)
     cfg = build_config(args, tf_outputs)
 
     print(f"\n{'='*60}")
@@ -231,11 +216,9 @@ def run_pipeline(args):
         print(f"  *** DRY RUN — no jobs will be submitted ***")
     print()
 
-    batch_client = get_batch_client(cfg["aws_profile"], cfg["aws_region"])
-    s3_client = get_s3_client(cfg["s3_profile"], cfg["aws_region"])
+    batch_client = get_aws_client(cfg["aws_profile"], cfg["aws_region"], "batch")
+    s3_client = get_aws_client(cfg["s3_profile"], cfg["aws_region"], "s3")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return
-    break
     # -----------------------------------------------------------------------
     # Phase 1: Split
     # -----------------------------------------------------------------------
@@ -246,27 +229,15 @@ def run_pipeline(args):
         "manifest_s3_key": cfg["manifest_s3_key"],
     }
 
-    # Date filters: append via containerOverrides.command when present
-    split_container_overrides = None
-    if args.after_date or args.before_date or args.dates:
-        pipeline_module = (
-            "ingest.gfm.batch_split" if args.pipeline == "gfm"
-            else "ingest.gfm_exp.batch_split"
-        )
-        split_cmd = [
-            pipeline_module,
-            "--bucket_name", cfg["s3_bucket"],
-            "--asset_object_key", cfg["asset_object_key"],
-            "--manifest-s3-key", cfg["manifest_s3_key"],
-        ]
-        if args.after_date:
-            split_cmd += ["--after-date", args.after_date]
-        if args.before_date:
-            split_cmd += ["--before-date", args.before_date]
-        if args.dates:
-            split_cmd += ["--dates", args.dates]
-        split_container_overrides = {"command": split_cmd}
-        split_params = {}  # parameters unused when command is fully overridden
+    # Pass optional date filters as env vars (entrypoint translates to CLI args)
+    date_env = []
+    if args.after_date:
+        date_env.append({"name": "AFTER_DATE", "value": args.after_date})
+    if args.before_date:
+        date_env.append({"name": "BEFORE_DATE", "value": args.before_date})
+    if args.dates:
+        date_env.append({"name": "DATES", "value": args.dates})
+    split_overrides = {"environment": date_env} if date_env else None
 
     split_job_name = f"{args.pipeline}-split-{timestamp}"
     split_job_id = submit_job(
@@ -275,7 +246,7 @@ def run_pipeline(args):
         job_definition=cfg["split_job_def"],
         job_queue=cfg["job_queue_name"],
         parameters=split_params,
-        container_overrides=split_container_overrides,
+        container_overrides=split_overrides,
         dry_run=args.dry_run,
     )
 
@@ -410,6 +381,11 @@ def parse_args():
         help="AWS profile for S3 access (defaults to --profile if not set)",
     )
     parser.add_argument("--region", default=None, help="AWS region")
+    parser.add_argument(
+        "--project-name",
+        default=None,
+        help="Project name for job definition naming (default: from terraform)",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",

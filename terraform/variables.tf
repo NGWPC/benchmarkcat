@@ -23,6 +23,12 @@ variable "project_name" {
   default     = "benchmarkcat"
 }
 
+variable "ecr_force_delete" {
+  description = "Allow force delete of ECR repository (default true for dev)"
+  type        = bool
+  default     = true
+}
+
 variable "aws_account_id" {
   description = "AWS account ID"
   type        = string

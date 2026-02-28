@@ -1,3 +1,23 @@
+output "aws_region" {
+  description = "AWS region (consumed by submit_pipeline.py and build_and_push.sh)"
+  value       = var.aws_region
+}
+
+output "aws_profile" {
+  description = "AWS CLI profile (consumed by submit_pipeline.py and build_and_push.sh)"
+  value       = var.aws_profile
+}
+
+output "project_name" {
+  description = "Project name for resource naming (consumed by submit_pipeline.py)"
+  value       = var.project_name
+}
+
+output "aws_account_id" {
+  description = "AWS account ID (consumed by build_and_push.sh)"
+  value       = var.aws_account_id
+}
+
 output "ecr_repository_url" {
   description = "ECR repository URL for docker push"
   value       = aws_ecr_repository.app.repository_url

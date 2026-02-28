@@ -424,24 +424,29 @@ def run_batch_split(
 
     s3_utils = S3Utils(s3)
 
+    # Date filters come from CLI (or from entrypoint-injected args when running in Batch)
+    after_date = args.after_date or None
+    before_date = args.before_date or None
+    dates = args.dates or None
+
     scenes = discover_scenes(
         s3_utils,
         args.bucket_name,
         args.asset_object_key,
-        args.after_date,
-        args.before_date,
-        args.dates,
+        after_date,
+        before_date,
+        dates,
     )
 
     logger.info("Total scenes: %d", len(scenes))
 
     meta_extra = {}
-    if args.after_date is not None:
-        meta_extra["after_date"] = args.after_date
-    if args.before_date is not None:
-        meta_extra["before_date"] = args.before_date
-    if args.dates is not None:
-        meta_extra["dates"] = args.dates
+    if after_date is not None:
+        meta_extra["after_date"] = after_date
+    if before_date is not None:
+        meta_extra["before_date"] = before_date
+    if dates is not None:
+        meta_extra["dates"] = dates
     write_manifest(
         s3_utils,
         args.bucket_name,

@@ -27,7 +27,7 @@ provider "aws" {
 resource "aws_ecr_repository" "app" {
   name                 = var.project_name
   image_tag_mutability = "MUTABLE"
-  force_delete         = true
+  force_delete         = var.ecr_force_delete
 
   image_scanning_configuration {
     scan_on_push = false
@@ -199,10 +199,13 @@ resource "aws_batch_job_definition" "jobs" {
 
   container_properties = jsonencode({
     image      = "${aws_ecr_repository.app.repository_url}:latest"
-    vcpus      = each.value.vcpus
-    memory     = each.value.memory
     jobRoleArn = var.batch_job_role_arn
     command    = each.value.command
+
+    resourceRequirements = [
+      { type = "VCPU", value = tostring(each.value.vcpus) },
+      { type = "MEMORY", value = tostring(each.value.memory) }
+    ]
 
     logConfiguration = {
       logDriver = "awslogs"

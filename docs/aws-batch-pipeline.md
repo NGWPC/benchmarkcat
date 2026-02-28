@@ -9,9 +9,9 @@ Scale GFM and GFM Expanded ingestion to tens of thousands of scenes using a 3-ph
 | `terraform/` | Infrastructure as code (ECR, compute env, queue, 6 job definitions) |
 | `terraform/terraform.tfvars` | All configurable values — gitignored; copy from `.tfvars.example` |
 | `terraform/terraform.tfvars.example` | Template with placeholder values for new setups |
-| `scripts/build_and_push.sh` | Build Docker image and push to ECR |
+| `scripts/build_and_push.sh` | Build Docker image and push to ECR; reads `aws_account_id`, `aws_region`, `aws_profile` from terraform outputs (falls back to env vars) |
 | `scripts/submit_pipeline.py` | Python orchestrator — submits split → workers → merge with polling |
-| `scripts/batch-entrypoint.sh` | Container entrypoint (injects `--job-index` for array workers) |
+| `scripts/batch-entrypoint.sh` | Cloud-agnostic entrypoint; injects `--job-index` from `AWS_BATCH_JOB_ARRAY_INDEX`, `AZ_BATCH_TASK_ID`, or `BATCH_TASK_INDEX` |
 
 ---
 
@@ -55,6 +55,8 @@ flowchart LR
 - Docker (for building images)
 - Python with `boto3` installed
 
+**Note:** `submit_pipeline.py` requires Terraform outputs. Run `terraform init` and `terraform apply` before submitting; otherwise the script exits with an error.
+
 ---
 
 ## Quick Start
@@ -82,8 +84,10 @@ This creates: ECR repository, CloudWatch log group, Batch compute environment, j
 ### 3. Build and Push Docker Image
 
 ```bash
-bash scripts/build_and_push.sh
+./scripts/build_and_push.sh
 ```
+
+The script reads `aws_account_id`, `aws_region`, and `aws_profile` from terraform outputs first, then falls back to env vars (`AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_PROFILE`). If neither terraform nor env vars are set, it fails with a clear error.
 
 Only needed when code changes (`ingest/`, `Dockerfile`, `scripts/batch-entrypoint.sh`). Changing S3 paths in `terraform.tfvars` does **not** require a rebuild.
 
@@ -94,7 +98,9 @@ Only needed when code changes (`ingest/`, `Dockerfile`, `scripts/batch-entrypoin
 python scripts/submit_pipeline.py \
   --pipeline gfm \
   --profile test-se \
-  --s3-profile Data
+  --s3-profile Data \
+  --scenes-per-job 10 \
+  --poll-interval 45
 
 # GFM Expanded — with date filter
 python scripts/submit_pipeline.py \
@@ -165,13 +171,16 @@ python scripts/submit_pipeline.py [options]
 | `--after-date` | — | Only include scenes ≥ YYYY-MM-DD (split phase only) |
 | `--before-date` | — | Only include scenes ≤ YYYY-MM-DD (split phase only) |
 | `--dates` | — | Comma-separated specific dates (split phase only) |
-| `--profile` | `test-se` | AWS profile for Batch API calls |
+| `--profile` | from terraform | AWS profile for Batch API calls |
 | `--s3-profile` | same as `--profile` | AWS profile for S3 access (if different from Batch) |
-| `--region` | `us-east-1` | AWS region |
+| `--region` | from terraform | AWS region |
+| `--project-name` | from terraform | Project name for job definition naming |
 | `--poll-interval` | `30` | Seconds between status polls |
 | `--dry-run` | false | Print what would be submitted without submitting |
 
 Date filters apply **only to Phase 1 (split)**. Workers process their manifest slice as-is; they do not re-apply date filters. A sidecar `<manifest>.meta.json` is written with `total_scenes` and any active filters for auditing.
+
+**Single source of truth:** Terraform is the source of truth for infrastructure and config. CLI overrides apply to: `--bucket-name`, `--scenes-per-job`, `--profile`, `--region`, `--project-name`, and date filters. S3 paths (`catalog_path`, `manifest_s3_key`, etc.) come only from Terraform — change them in `terraform.tfvars` and run `terraform apply`.
 
 ---
 
@@ -185,7 +194,8 @@ All variables are declared in `terraform/variables.tf` with defaults. Override i
 |----------|---------|-------------|
 | `instance_types` | `["m5.xlarge", "m5.2xlarge", "r5.xlarge", "r5.2xlarge"]` | CPU instance type(s); Batch picks the best available |
 | `max_vcpus` | `256` | Max vCPUs across all running instances |
-| `use_spot` | `false` | Use Spot instances (~60–70% cheaper; risk of interruption) |
+| `use_spot` | `true` | Use Spot instances (~60–70% cheaper; risk of interruption) |
+| `ecr_force_delete` | `true` | Allow force delete of ECR repository on `terraform destroy` |
 
 ### S3 / Pipeline Paths
 
@@ -206,6 +216,8 @@ All variables are declared in `terraform/variables.tf` with defaults. Override i
 
 ## Troubleshooting
 
-**AccessDenied on S3 (orchestrator)**: The orchestrator reads the manifest metadata from S3 locally to compute array size. Use `--s3-profile Data` if your Batch profile (`test-se`) lacks S3 permissions.
+**Terraform outputs not available**: The script exits with this error if Terraform is not initialized or applied. Run `cd terraform && terraform init && terraform apply` from the repo root, then run `submit_pipeline.py` again.
+
+**AccessDenied on S3 (orchestrator)**: The orchestrator reads the manifest metadata from S3 locally to compute array size. Use `--s3-profile Data` if your Batch profile lacks S3 permissions.
 
 **Worker OOM (exit code 137)**: Increase `worker_memory` in `terraform.tfvars` and run `terraform apply`. Default is 16 GB; try 32768 for very large scenes.

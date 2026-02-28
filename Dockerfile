@@ -33,6 +33,6 @@ RUN pip3 install --no-cache-dir -e .
 # Examples:
 #   gfm:     docker run <image> ingest.gfm.gfm_col --bucket_name fimc-data ...
 #   gfm_exp: docker run <image> ingest.gfm_exp.gfm_exp_col --bucket_name fimc-data ...
-COPY ./scripts/batch-entrypoint.sh ./
-RUN chmod +x batch-entrypoint.sh
-ENTRYPOINT ["./batch-entrypoint.sh"]
+COPY ./scripts/batch-entrypoint.sh /usr/local/bin/batch-entrypoint.sh
+RUN chmod +x /usr/local/bin/batch-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/batch-entrypoint.sh"]
