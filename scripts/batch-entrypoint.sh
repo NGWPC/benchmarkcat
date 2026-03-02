@@ -22,20 +22,19 @@ elif [ -n "$BATCH_TASK_INDEX" ]; then
     JOB_INDEX="$BATCH_TASK_INDEX"
 fi
 
-# Build extra CLI args from environment
-EXTRA_ARGS=""
+# Build extra CLI args from environment using an array to avoid word-splitting
+EXTRA_ARGS=()
 if [ -n "$JOB_INDEX" ]; then
-    EXTRA_ARGS="$EXTRA_ARGS --job-index $JOB_INDEX"
+    EXTRA_ARGS+=(--job-index "$JOB_INDEX")
 fi
 if [ -n "$AFTER_DATE" ]; then
-    EXTRA_ARGS="$EXTRA_ARGS --after-date $AFTER_DATE"
+    EXTRA_ARGS+=(--after-date "$AFTER_DATE")
 fi
 if [ -n "$BEFORE_DATE" ]; then
-    EXTRA_ARGS="$EXTRA_ARGS --before-date $BEFORE_DATE"
+    EXTRA_ARGS+=(--before-date "$BEFORE_DATE")
 fi
 if [ -n "$DATES" ]; then
-    EXTRA_ARGS="$EXTRA_ARGS --dates $DATES"
+    EXTRA_ARGS+=(--dates "$DATES")
 fi
 
-# shellcheck disable=SC2086
-exec python3 -m "$@" $EXTRA_ARGS
+exec python3 -m "$@" "${EXTRA_ARGS[@]}"

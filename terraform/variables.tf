@@ -12,9 +12,9 @@ variable "aws_region" {
 }
 
 variable "aws_profile" {
-  description = "AWS CLI profile to use"
+  description = "AWS CLI profile to use (leave unset to use the default credential chain)"
   type        = string
-  default     = "test-se"
+  default     = null
 }
 
 variable "project_name" {
@@ -24,15 +24,14 @@ variable "project_name" {
 }
 
 variable "ecr_force_delete" {
-  description = "Allow force delete of ECR repository (default true for dev)"
+  description = "Allow force delete of ECR repository. Set true for dev, false for production."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "aws_account_id" {
   description = "AWS account ID"
   type        = string
-  default     = "591210920133"
 }
 
 # -----------------------------------------------------------------------------
@@ -41,21 +40,37 @@ variable "aws_account_id" {
 variable "batch_job_role_arn" {
   description = "IAM role ARN for Batch job containers (S3 access, CloudWatch Logs)"
   type        = string
+  validation {
+    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.+", var.batch_job_role_arn))
+    error_message = "batch_job_role_arn must be a valid IAM role ARN (arn:aws:iam::ACCOUNT:role/NAME)."
+  }
 }
 
 variable "batch_instance_profile" {
   description = "EC2 instance profile ARN for Batch compute instances"
   type        = string
+  validation {
+    condition     = can(regex("^arn:aws:iam::[0-9]{12}:instance-profile/.+", var.batch_instance_profile))
+    error_message = "batch_instance_profile must be a valid instance profile ARN."
+  }
 }
 
 variable "spot_fleet_role_arn" {
   description = "IAM role ARN for EC2 Spot Fleet requests"
   type        = string
+  validation {
+    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.+", var.spot_fleet_role_arn))
+    error_message = "spot_fleet_role_arn must be a valid IAM role ARN (arn:aws:iam::ACCOUNT:role/NAME)."
+  }
 }
 
 variable "batch_service_role_arn" {
   description = "Service-linked role ARN for AWS Batch"
   type        = string
+  validation {
+    condition     = can(regex("^arn:aws(:-[a-z]+)*:iam::[0-9]{12}:role/.+", var.batch_service_role_arn))
+    error_message = "batch_service_role_arn must be a valid IAM role ARN."
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -89,7 +104,7 @@ variable "instance_types" {
 variable "use_spot" {
   description = "Use Spot instances (true) or On-Demand (false)"
   type        = bool
-  default     = true
+  default     = false
 }
 
 # -----------------------------------------------------------------------------
@@ -156,12 +171,11 @@ variable "retry_attempts" {
 }
 
 # -----------------------------------------------------------------------------
-# S3 / Pipeline Config (defaults match existing code defaults)
+# S3 / Pipeline Config
 # -----------------------------------------------------------------------------
 variable "s3_bucket" {
   description = "S3 bucket for all pipeline data"
   type        = string
-  default     = "fimc-data"
 }
 
 variable "scenes_per_job" {
@@ -173,67 +187,71 @@ variable "scenes_per_job" {
 variable "catalog_path" {
   description = "S3 prefix for the STAC catalog"
   type        = string
-  default     = "benchmark/stac-bench-cat/"
 }
 
 variable "hucs_object_key" {
   description = "S3 key for the HUC8 GeoPackage"
   type        = string
-  default     = "benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg"
 }
 
 variable "boundaries_object_key" {
   description = "S3 key for the Mexico/Canada boundaries GeoPackage"
   type        = string
-  default     = "benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg"
 }
 
 # GFM pipeline paths
 variable "gfm_asset_object_key" {
   description = "S3 prefix for GFM source data (DFO event directories)"
   type        = string
-  default     = "benchmark/rs/gfm/"
 }
 
 variable "gfm_manifest_s3_key" {
   description = "S3 key where the GFM manifest JSONL is written"
   type        = string
-  default     = "benchmark/stac-bench-cat/batch/gfm_manifest.jsonl"
 }
 
 variable "gfm_partial_parquet_prefix" {
   description = "S3 prefix for GFM per-job partial parquets"
   type        = string
-  default     = "benchmark/stac-bench-cat/batch/gfm_partials"
 }
 
 variable "gfm_derived_metadata_path" {
   description = "S3 key for the GFM master parquet"
   type        = string
-  default     = "benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet"
 }
 
 # GFM_EXP pipeline paths
 variable "gfm_exp_asset_object_key" {
   description = "S3 prefix for GFM_EXP source data (PI4 date directories)"
   type        = string
-  default     = "benchmark/rs/PI4/"
 }
 
 variable "gfm_exp_manifest_s3_key" {
   description = "S3 key where the GFM_EXP manifest JSONL is written"
   type        = string
-  default     = "benchmark/stac-bench-cat/batch/gfm_exp_manifest.jsonl"
 }
 
 variable "gfm_exp_partial_parquet_prefix" {
   description = "S3 prefix for GFM_EXP per-job partial parquets"
   type        = string
-  default     = "benchmark/stac-bench-cat/batch/gfm_exp_partials"
 }
 
 variable "gfm_exp_derived_metadata_path" {
   description = "S3 key for the GFM_EXP master parquet"
   type        = string
-  default     = "benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet"
+}
+
+# -----------------------------------------------------------------------------
+# Docker / Observability
+# -----------------------------------------------------------------------------
+variable "image_tag" {
+  description = "Docker image tag for job definitions. Pin to a specific tag in production."
+  type        = string
+  default     = "latest"
+}
+
+variable "log_retention_days" {
+  description = "CloudWatch log retention in days for Batch job logs"
+  type        = number
+  default     = 365
 }

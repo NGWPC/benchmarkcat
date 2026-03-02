@@ -42,14 +42,14 @@ elif [ -d "terraform" ] && command -v terraform &>/dev/null; then
 fi
 
 if [ -z "$ECR_REPO" ]; then
-  # Fallback: construct from account ID and project name
-  _tf_project=$(cd terraform && terraform output -raw project_name 2>/dev/null) || true
-  PROJECT_NAME=${_tf_project:-${PROJECT_NAME:-benchmarkcat}}
-  ECR_REPO="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}"
-  echo "Using constructed ECR URL: $ECR_REPO"
-else
-  echo "Using ECR URL: $ECR_REPO"
+  echo "ERROR: Could not determine ECR repository URL." >&2
+  echo "Run 'cd terraform && terraform apply' or set ECR_REPO env var." >&2
+  exit 1
 fi
+echo "Using ECR URL: $ECR_REPO"
+
+# Extract project name from ECR URL for local docker tag
+PROJECT_NAME=$(basename "$ECR_REPO")
 
 # 1. Login to ECR
 echo "Logging in to ECR..."
@@ -61,10 +61,10 @@ aws ecr get-login-password \
 
 # 2. Build
 echo "Building Docker image (linux/amd64)..."
-docker build --platform linux/amd64 -t benchmarkcat .
+docker build --platform linux/amd64 -t "${PROJECT_NAME}" .
 
 # 3. Tag
-docker tag benchmarkcat:latest "${ECR_REPO}:latest"
+docker tag "${PROJECT_NAME}:latest" "${ECR_REPO}:latest"
 
 # 4. Push
 echo "Pushing to ECR..."

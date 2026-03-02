@@ -40,29 +40,29 @@ def initialize_s3_utils(profile: str | None = None):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--link_type", type=str, default="uri", help='Link type, either "url" or "uri"')
-    parser.add_argument("--bucket_name", type=str, default="fimc-data", help="S3 bucket name")
+    parser.add_argument("--bucket_name", type=str, required=True, help="S3 bucket name")
     parser.add_argument(
         "--catalog_path",
         type=str,
-        default="benchmark/stac-bench-cat/",
+        required=True,
         help="Path to the STAC catalog in the S3 bucket",
     )
     parser.add_argument(
         "--asset_object_key",
         type=str,
-        default="benchmark/rs/PI4/",
-        help="Key for the asset object in the S3 bucket",
+        required=True,
+        help="S3 prefix for GFM_EXP source data (PI4 date directories)",
     )
     parser.add_argument(
         "--hucs_object_key",
         type=str,
-        default="benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg",
-        help="Where to download the gpkg with the huc8 info",
+        required=True,
+        help="S3 key for the HUC8 GeoPackage",
     )
     parser.add_argument(
         "--boundaries_object_key",
         type=str,
-        default="benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg",
+        required=True,
         help="S3 key for the Mexico/Canada boundaries GeoPackage",
     )
     parser.add_argument(
@@ -73,7 +73,7 @@ def parse_arguments():
     parser.add_argument(
         "--derived_metadata_path",
         type=str,
-        default="benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet",
+        required=True,
         help="S3 key for the derived metadata Parquet file created by asset handling code.",
     )
     parser.add_argument(
@@ -621,7 +621,7 @@ def _process_one_scene(
 ):
     """Top-level worker for parallel scene processing. Creates own s3_utils and asset_handler."""
     date_path, date_id, sent_ti_path = work_item
-    print(f"Processing scene: {sent_ti_path} of date: {date_id}")
+    logging.info("Processing scene: %s of date: %s", sent_ti_path, date_id)
     if profile is not None:
         os.environ["AWS_PROFILE"] = profile
     else:
@@ -737,10 +737,13 @@ def main_batch_worker(args):
             )
             with multiprocessing.Pool(args.workers) as pool:
                 for result in pool.imap_unordered(worker, work_items):
-                    item, sent_ti_path, asset_results = result
-                    if item is not None and asset_results is not None:
-                        item_buffer.append(item)
-                        asset_handler.merge_single_result(sent_ti_path, asset_results)
+                    try:
+                        item, sent_ti_path, asset_results = result
+                        if item is not None and asset_results is not None:
+                            item_buffer.append(item)
+                            asset_handler.merge_single_result(sent_ti_path, asset_results)
+                    except Exception as e:
+                        logging.warning("Worker result failed: %s", e)
 
     flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
 
@@ -763,7 +766,6 @@ def main():
         main_batch_worker(args)
         return
 
-    s3_utils = initialize_s3_utils(profile=args.profile)
     if args.profile is not None:
         os.environ["AWS_PROFILE"] = args.profile
     else:
@@ -774,6 +776,8 @@ def main():
 
     # Increases the size of the first request to grab headers + metadata in one go
     os.environ["CPL_VSIL_CURL_CHUNK_SIZE"] = "65536"
+
+    s3_utils = initialize_s3_utils(profile=args.profile)
 
     collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)

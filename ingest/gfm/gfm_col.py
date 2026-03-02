@@ -41,26 +41,26 @@ def initialize_s3_utils(profile=None):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--link_type", type=str, default="uri", help='Link type, either "url" or "uri"')
-    parser.add_argument("--bucket_name", type=str, default="fimc-data", help="S3 bucket name")
+    parser.add_argument("--bucket_name", type=str, required=True, help="S3 bucket name")
     parser.add_argument(
         "--catalog_path",
         type=str,
-        default="benchmark/stac-bench-cat/",
+        required=True,
         help="Path to the STAC catalog in the S3 bucket",
     )
     parser.add_argument(
-        "--asset_object_key", type=str, default="benchmark/rs/gfm/", help="S3 prefix for GFM data (parent of DFO event dirs)."
+        "--asset_object_key", type=str, required=True, help="S3 prefix for GFM data (parent of DFO event dirs)."
     )
     parser.add_argument(
         "--hucs_object_key",
         type=str,
-        default="benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg",
-        help="Where to download the gpkg with the huc8 info",
+        required=True,
+        help="S3 key for the HUC8 GeoPackage",
     )
     parser.add_argument(
         "--boundaries_object_key",
         type=str,
-        default="benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg",
+        required=True,
         help="S3 key for the Mexico/Canada boundaries GeoPackage",
     )
     parser.add_argument(
@@ -69,7 +69,7 @@ def parse_arguments():
     parser.add_argument(
         "--derived_metadata_path",
         type=str,
-        default="benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet",
+        required=True,
         help="S3 key for the derived metadata Parquet file created by asset handling code.",
     )
     parser.add_argument("--skip-owp-qc", action="store_true", help="Skip OWP QC grading (faster runs).")
@@ -715,10 +715,13 @@ def main_batch_worker(args):
             )
             with multiprocessing.Pool(args.workers) as pool:
                 for result in pool.imap_unordered(worker, work_items):
-                    item, sent_ti_path, asset_results = result
-                    if item is not None and asset_results is not None:
-                        item_buffer.append(item)
-                        asset_handler.merge_single_result(sent_ti_path, asset_results)
+                    try:
+                        item, sent_ti_path, asset_results = result
+                        if item is not None and asset_results is not None:
+                            item_buffer.append(item)
+                            asset_handler.merge_single_result(sent_ti_path, asset_results)
+                    except Exception as e:
+                        logging.warning("Worker result failed: %s", e)
 
     flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
 

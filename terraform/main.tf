@@ -81,7 +81,7 @@ resource "aws_batch_job_queue" "pipeline" {
 # -----------------------------------------------------------------------------
 resource "aws_cloudwatch_log_group" "batch" {
   name              = "/aws/batch/${var.project_name}"
-  retention_in_days = 365
+  retention_in_days = var.log_retention_days
 }
 
 # -----------------------------------------------------------------------------
@@ -198,7 +198,7 @@ resource "aws_batch_job_definition" "jobs" {
   }
 
   container_properties = jsonencode({
-    image      = "${aws_ecr_repository.app.repository_url}:latest"
+    image      = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
     jobRoleArn = var.batch_job_role_arn
     command    = each.value.command
 

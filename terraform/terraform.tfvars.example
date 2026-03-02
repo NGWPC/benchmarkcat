@@ -23,9 +23,16 @@ security_group_ids = [
 max_vcpus      = 256
 instance_types = ["m5.xlarge", "m5.2xlarge", "r5.xlarge", "r5.2xlarge"]
 use_spot       = false  # set true for Spot
+ecr_force_delete = true  # set false for production
+
+# Docker image tag (pin to a specific SHA or semver in production)
+image_tag = "latest"
+
+# CloudWatch log retention (days)
+log_retention_days = 365
 
 # S3 bucket
-s3_bucket      = "fimc-data"
+s3_bucket      = "your-s3-bucket"
 scenes_per_job = 50
 
 # --- paths ---

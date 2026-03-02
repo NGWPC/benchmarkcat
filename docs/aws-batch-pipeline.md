@@ -84,6 +84,8 @@ This creates: ECR repository, CloudWatch log group, Batch compute environment, j
 ### 3. Build and Push Docker Image
 
 ```bash
+cd ..
+chmod +x ./scripts/build_and_push.sh
 ./scripts/build_and_push.sh
 ```
 
@@ -97,8 +99,8 @@ Only needed when code changes (`ingest/`, `Dockerfile`, `scripts/batch-entrypoin
 # GFM — full run
 python scripts/submit_pipeline.py \
   --pipeline gfm \
-  --profile test-se \
-  --s3-profile Data \
+  --profile <your-aws-profile> \
+  --s3-profile <your-s3-profile> \
   --scenes-per-job 10 \
   --poll-interval 45
 
@@ -107,8 +109,8 @@ python scripts/submit_pipeline.py \
   --pipeline gfm_exp \
   --after-date 2024-01-01 \
   --before-date 2024-06-30 \
-  --profile test-se \
-  --s3-profile Data
+  --profile <your-aws-profile> \
+  --s3-profile <your-s3-profile>
 
 # Dry run first (no jobs submitted)
 python scripts/submit_pipeline.py --pipeline gfm --dry-run
@@ -124,10 +126,10 @@ CloudWatch logs:
 
 ```bash
 # Stream all benchmarkcat logs
-aws logs tail /aws/batch/benchmarkcat --follow --profile test-se
+aws logs tail /aws/batch/benchmarkcat --follow --profile <your-aws-profile>
 
 # Filter to a specific phase
-aws logs tail /aws/batch/benchmarkcat --follow --profile test-se --filter-pattern "gfm-worker"
+aws logs tail /aws/batch/benchmarkcat --follow --profile <your-aws-profile> --filter-pattern "gfm-worker"
 ```
 
 ### 6. Cleanup
@@ -137,6 +139,8 @@ terraform destroy
 ```
 
 Removes ECR repository, log group, compute environment, job queue, and all job definitions. Does **not** delete S3 data or IAM roles.
+
+> **Note:** If `ecr_force_delete = true` (the default for dev), `terraform destroy` will also delete all Docker images from ECR. After re-running `terraform apply`, you will need to rebuild and push the image: `./scripts/build_and_push.sh`.
 
 ---
 
@@ -150,8 +154,8 @@ tmux new -s benchmarkcat
 python scripts/submit_pipeline.py \
   --pipeline gfm \
   --scenes-per-job 50 \
-  --profile test-se \
-  --s3-profile Data \
+  --profile <your-aws-profile> \
+  --s3-profile <your-s3-profile> \
   --poll-interval 60
 ```
 
@@ -186,7 +190,7 @@ Date filters apply **only to Phase 1 (split)**. They are passed to the split job
 
 ## Configuration Reference
 
-All variables are declared in `terraform/variables.tf` with defaults. Override in `terraform/terraform.tfvars`.
+All variables are declared in `terraform/variables.tf`. Required variables (no defaults) must be set in `terraform/terraform.tfvars`. Copy `terraform/terraform.tfvars.example` as a starting point.
 
 ### Compute
 
@@ -194,23 +198,27 @@ All variables are declared in `terraform/variables.tf` with defaults. Override i
 |----------|---------|-------------|
 | `instance_types` | `["m5.xlarge", "m5.2xlarge", "r5.xlarge", "r5.2xlarge"]` | CPU instance type(s); Batch picks the best available |
 | `max_vcpus` | `256` | Max vCPUs across all running instances |
-| `use_spot` | `true` | Use Spot instances (~60–70% cheaper; risk of interruption) |
-| `ecr_force_delete` | `true` | Allow force delete of ECR repository on `terraform destroy` |
+| `use_spot` | `false` | Use Spot instances (cheaper; risk of interruption) |
+| `ecr_force_delete` | `false` | Allow force delete of ECR on `terraform destroy` — set `true` for dev |
+| `image_tag` | `latest` | Docker image tag; pin to a SHA or semver for production |
+| `log_retention_days` | `365` | CloudWatch log retention in days |
 
 ### S3 / Pipeline Paths
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `s3_bucket` | `fimc-data` | S3 bucket for all I/O |
-| `scenes_per_job` | `50` | Default scenes per worker; controls array size |
-| `catalog_path` | `benchmark/stac-bench-cat/` | Root catalog prefix |
-| `hucs_object_key` | `benchmark/.../WBDHU8_webproj.gpkg` | HUC8 boundaries (shared) |
-| `boundaries_object_key` | `benchmark/.../Mexico_Canada_boundaries.gpkg` | Country boundaries (shared) |
-| `gfm_asset_object_key` | `benchmark/rs/gfm/` | GFM source data prefix |
-| `gfm_manifest_s3_key` | `benchmark/.../batch/gfm_manifest.jsonl` | GFM manifest |
-| `gfm_partial_parquet_prefix` | `benchmark/.../batch/gfm_partials` | GFM partial parquets |
-| `gfm_derived_metadata_path` | `benchmark/.../gfm_collection.parquet` | GFM master parquet |
-| `gfm_exp_*` | *(same pattern, PI4 paths)* | GFM Expanded equivalents |
+All path variables are **required** — no defaults. Set them in `terraform/terraform.tfvars`.
+
+| Variable | Description |
+|----------|-------------|
+| `s3_bucket` | S3 bucket for all I/O |
+| `scenes_per_job` | Default scenes per worker; controls array size (default: `50`) |
+| `catalog_path` | Root catalog prefix |
+| `hucs_object_key` | S3 key for HUC8 boundaries GeoPackage |
+| `boundaries_object_key` | S3 key for country boundaries GeoPackage |
+| `gfm_asset_object_key` | GFM source data prefix |
+| `gfm_manifest_s3_key` | GFM manifest JSONL key |
+| `gfm_partial_parquet_prefix` | GFM partial parquets prefix |
+| `gfm_derived_metadata_path` | GFM master parquet key |
+| `gfm_exp_*` | GFM Expanded equivalents (same pattern) |
 
 ---
 
@@ -218,6 +226,12 @@ All variables are declared in `terraform/variables.tf` with defaults. Override i
 
 **Terraform outputs not available**: The script exits with this error if Terraform is not initialized or applied. Run `cd terraform && terraform init && terraform apply` from the repo root, then run `submit_pipeline.py` again.
 
-**AccessDenied on S3 (orchestrator)**: The orchestrator reads the manifest metadata from S3 locally to compute array size. Use `--s3-profile Data` if your Batch profile lacks S3 permissions.
+**AccessDenied on S3 (orchestrator)**: The orchestrator reads the manifest metadata from S3 locally to compute array size. Use `--s3-profile <profile>` if your Batch profile lacks S3 permissions.
+
+**Phase 2 never starts / array size wrong**: The orchestrator reads `<manifest_s3_key>.meta.json` (written by the split job) to determine total scene count. If the split succeeded but Phase 2 fails to launch, inspect the sidecar:
+```bash
+aws s3 cp s3://<bucket>/<manifest_s3_key>.meta.json - | python3 -m json.tool
+```
+It contains `total_scenes`, `created_at`, and any active date filters. If `total_scenes = 0`, the split found no matching scenes — check your date filters and S3 prefix.
 
 **Worker OOM (exit code 137)**: Increase `worker_memory` in `terraform.tfvars` and run `terraform apply`. Default is 16 GB; try 32768 for very large scenes.

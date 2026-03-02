@@ -128,8 +128,11 @@ def merge_partial_parquets(
             s3_utils.s3_client.download_file(bucket_name, master_key, master_local)
             frames.append(pd.read_parquet(master_local))
             logger.info("Loaded master parquet (%d rows)", len(frames[-1]))
-        except Exception:
-            logger.info("No existing master parquet at %s — starting fresh", master_key)
+        except s3_utils.s3_client.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                logger.info("No existing master parquet at %s — starting fresh", master_key)
+            else:
+                raise
 
         # Load each partial
         for key in partial_keys:
@@ -254,7 +257,7 @@ def run_batch_merge(
     import boto3
 
     parser = argparse.ArgumentParser(description=f"Merge {description} batch-worker outputs.")
-    parser.add_argument("--bucket_name", type=str, default="fimc-data")
+    parser.add_argument("--bucket_name", type=str, required=True)
     parser.add_argument(
         "--partial-parquet-prefix",
         type=str,
@@ -265,18 +268,20 @@ def run_batch_merge(
         "--derived_metadata_path",
         type=str,
         default=default_derived_metadata_path,
+        required=default_derived_metadata_path is None,
         help="S3 key of the master parquet file.",
     )
     parser.add_argument(
         "--catalog_path",
         type=str,
-        default="benchmark/stac-bench-cat/",
+        required=True,
         help="S3 prefix of the STAC catalog.",
     )
     parser.add_argument(
         "--asset_object_key",
         type=str,
         default=default_asset_object_key,
+        required=default_asset_object_key is None,
         help=f"S3 prefix for {description} data (used when creating collection if missing).",
     )
     parser.add_argument(
@@ -326,11 +331,14 @@ def run_batch_merge(
         response = s3_utils.s3_client.get_object(Bucket=args.bucket_name, Key=collection_key)
         collection_dict = json.loads(response["Body"].read().decode("utf-8"))
         collection = pystac.Collection.from_dict(collection_dict)
-    except Exception:
-        logger.warning("Could not load existing collection.json — creating from scratch")
-        collection = collection_creator(
-            args.link_type, args.bucket_name, args.asset_object_key, s3_utils
-        )
+    except s3_utils.s3_client.exceptions.ClientError as e:
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            logger.warning("No existing collection.json at %s — creating from scratch", collection_key)
+            collection = collection_creator(
+                args.link_type, args.bucket_name, args.asset_object_key, s3_utils
+            )
+        else:
+            raise
 
     # Remove existing item links so we can re-add from S3 listing
     collection.links = [lk for lk in collection.links if lk.rel != pystac.RelType.ITEM]
@@ -380,8 +388,13 @@ def run_batch_split(
     import boto3
 
     parser = argparse.ArgumentParser(description=f"Build {description} scene manifest for batch processing.")
-    parser.add_argument("--bucket_name", type=str, default="fimc-data")
-    parser.add_argument("--asset_object_key", type=str, default=default_asset_object_key)
+    parser.add_argument("--bucket_name", type=str, required=True)
+    parser.add_argument(
+        "--asset_object_key",
+        type=str,
+        default=default_asset_object_key,
+        required=default_asset_object_key is None,
+    )
     parser.add_argument(
         "--manifest-s3-key",
         type=str,

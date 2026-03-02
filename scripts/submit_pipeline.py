@@ -131,7 +131,7 @@ def submit_job(batch_client, job_name, job_definition, job_queue, parameters,
         "jobQueue": job_queue,
         "parameters": parameters,
     }
-    if array_size and array_size >= MIN_ARRAY_SIZE:
+    if array_size is not None and array_size >= MIN_ARRAY_SIZE:
         kwargs["arrayProperties"] = {"size": array_size}
     if container_overrides:
         kwargs["containerOverrides"] = container_overrides
@@ -147,12 +147,18 @@ def submit_job(batch_client, job_name, job_definition, job_queue, parameters,
 def poll_until_complete(batch_client, job_id, job_name, poll_interval=30):
     """Poll until job reaches SUCCEEDED or FAILED. Exits process on failure."""
     terminal_states = {"SUCCEEDED", "FAILED"}
+    not_found_retries = 0
+    MAX_NOT_FOUND_RETRIES = 10
     while True:
         response = batch_client.describe_jobs(jobs=[job_id])
         if not response["jobs"]:
-            print(f"  WARNING: job {job_id} not found, retrying...")
+            not_found_retries += 1
+            if not_found_retries > MAX_NOT_FOUND_RETRIES:
+                sys.exit(f"ERROR: Job {job_id} not found after {MAX_NOT_FOUND_RETRIES} retries. It may have been deleted or the ID is invalid.")
+            print(f"  WARNING: job {job_id} not found (attempt {not_found_retries}/{MAX_NOT_FOUND_RETRIES}), retrying...")
             time.sleep(poll_interval)
             continue
+        not_found_retries = 0
 
         job = response["jobs"][0]
         status = job["status"]
@@ -265,6 +271,8 @@ def run_pipeline(args):
     else:
         total_scenes = read_manifest_total(s3_client, cfg["s3_bucket"], cfg["manifest_s3_key"])
         print(f"  Total scenes in manifest: {total_scenes}")
+        if total_scenes == 0:
+            sys.exit("ERROR: Split produced 0 scenes. Check date filters and S3 prefix.")
 
     scenes_per_job = int(cfg["scenes_per_job"])
     if total_scenes <= scenes_per_job:
