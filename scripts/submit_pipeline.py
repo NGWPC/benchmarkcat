@@ -205,6 +205,17 @@ def run_pipeline(args):
     _require_terraform_or_exit(tf_outputs)
     cfg = build_config(args, tf_outputs)
 
+    required_cfg_keys = [
+        "job_queue_name", "s3_bucket", "catalog_path",
+        "asset_object_key", "manifest_s3_key", "partial_parquet_prefix",
+        "derived_metadata_path",
+        "hucs_object_key", "boundaries_object_key",
+    ]
+    missing = [k for k in required_cfg_keys if cfg.get(k) is None]
+    if missing:
+        sys.exit(f"ERROR: Missing required config values: {', '.join(missing)}\n"
+                 "Check terraform outputs or provide CLI overrides.")
+
     print(f"\n{'='*60}")
     print(f"  Benchmarkcat Batch Pipeline — {args.pipeline.upper()}")
     print(f"{'='*60}")

@@ -828,7 +828,7 @@ def main():
 
         if args.workers <= 1:
             for date in dates:
-                print(f"===============processing {date}===============")
+                logging.info("===============processing %s===============", date)
                 process_date(
                     date,
                     s3_utils,
@@ -874,7 +874,7 @@ def main():
                         work_items_to_process.append((date_path, date_id, sent_ti_path))
                 work_items = work_items_to_process
 
-            print(f"Work items to process: {len(work_items)}")
+            logging.info("Work items to process: %d", len(work_items))
 
             worker = partial(
                 _process_one_scene,
@@ -890,9 +890,12 @@ def main():
             )
             with multiprocessing.Pool(args.workers) as pool:
                 for result in pool.imap_unordered(worker, work_items):
-                    item, sent_ti_path, asset_results = result
-                    if item is not None and asset_results is not None:
-                        on_scene_done(item, sent_ti_path, asset_results)
+                    try:
+                        item, sent_ti_path, asset_results = result
+                        if item is not None and asset_results is not None:
+                            on_scene_done(item, sent_ti_path, asset_results)
+                    except Exception as e:
+                        logging.warning("Worker result failed: %s", e)
 
     # Flush remaining item buffer
     if args.checkpoint_every > 0:

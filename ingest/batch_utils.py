@@ -141,8 +141,11 @@ def merge_partial_parquets(
                 s3_utils.s3_client.download_file(bucket_name, key, local)
                 frames.append(pd.read_parquet(local))
                 logger.info("Loaded partial %s (%d rows)", key, len(frames[-1]))
-            except Exception as e:
-                logger.warning("Failed to load partial %s: %s", key, e)
+            except s3_utils.s3_client.exceptions.ClientError as e:
+                if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                    logger.warning("Failed to load partial %s: %s", key, e)
+                else:
+                    raise
 
         if not frames:
             return pd.DataFrame()

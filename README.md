@@ -35,6 +35,9 @@ benchmarkcat/
 │   ├── gfm/v1.0.0/
 │   └── common_item_metadata/
 ├── scripts/                   # Utility scripts
+│   ├── submit_pipeline.py    # AWS Batch pipeline orchestrator
+│   ├── build_and_push.sh     # Build & push Docker image to ECR
+│   ├── batch-entrypoint.sh   # Container entrypoint for batch jobs
 │   ├── stac_processor.py     # STAC catalog processing
 │   ├── normalize_cat.py      # Catalog normalization
 │   └── update_asset_links.py # Asset link updates
@@ -279,10 +282,10 @@ docker run --rm \
   benchmarkcat \
   ingest.gfm_exp.batch_merge \
   --bucket_name fimc-data \
-  --partial-parquet-prefix scratch/biplov.bhandari/gfm-stac-test/stac/batch/gfm_exp_partials \
-  --derived_metadata_path scratch/biplov.bhandari/gfm-stac-test/stac/assets/derived-asset-data/gfm_expanded_collection.parquet \
-  --catalog_path scratch/biplov.bhandari/gfm-stac-test/stac/ \
-  --asset_object_key scratch/biplov.bhandari/gfm-stac-test/data-gfm-exp/ \
+  --partial-parquet-prefix benchmark/stac-bench-cat/batch/gfm_exp_partials \
+  --derived_metadata_path benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet \
+  --catalog_path benchmark/stac-bench-cat/ \
+  --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
   --skip-delete-partials \
   2>&1 | tee logs/gfm_col_run_merge.log
@@ -410,7 +413,7 @@ GFM and GFM Expanded additionally support:
 - `--boundaries_object_key`: S3 key for Mexico/Canada boundaries (GFM/GFM-exp; used to skip non-CONUS scenes)
 - **Date filters:** `--after-date` (YYYY-MM-DD), `--before-date` (YYYY-MM-DD), `--dates` (comma-separated list). Limit processing to a date range or specific dates. **GFM-exp:** filters by date folder (top-level PI4 dirs). **GFM:** filters by scene acquisition date (parsed from Sentinel product name in path). Applied in order: after_date, then before_date, then dates list.
 
-Batch-worker mode (GFM/GFM-exp) also uses: `--mode batch-worker`, `--manifest-s3-key`, `--partial-parquet-prefix`, `--job-index` (or `AWS_BATCH_JOB_ARRAY_INDEX`), `--scenes-per-job`
+Batch-worker mode (GFM/GFM-exp) also uses: `--mode batch-worker`, `--manifest-s3-key`, `--partial-parquet-prefix`, `--job-index` (or `AWS_BATCH_JOB_ARRAY_INDEX`, `AZ_BATCH_TASK_ID`, `BATCH_TASK_INDEX`), `--scenes-per-job`
 
 ### Processing Pipeline
 
