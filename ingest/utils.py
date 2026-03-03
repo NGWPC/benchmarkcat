@@ -208,6 +208,8 @@ class S3Utils:
                 else:
                     raise
 
+            # Set collection self href so PySTAC can resolve relative links (e.g. parent ../catalog.json)
+            collection.set_self_href(os.path.join(temp_dir, catalog_id, "collection.json"))
             catalog.add_child(collection)
 
             catalog.normalize_and_save(
@@ -271,6 +273,8 @@ class S3Utils:
                     ]
                 else:
                     raise
+            # Set collection self href so PySTAC can resolve relative links (e.g. parent ../catalog.json)
+            collection.set_self_href(os.path.join(temp_dir, catalog_id, "collection.json"))
             catalog.add_child(collection)
             catalog.normalize_and_save(
                 root_href=temp_dir,
