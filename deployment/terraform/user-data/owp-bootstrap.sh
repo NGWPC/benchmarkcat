@@ -103,7 +103,7 @@ aws --version
 
 # Install Python dependencies for catalog loading scripts
 echo "[$(date)] Installing Python dependencies..."
-pip3 install --no-cache-dir psycopg2-binary
+pip3 install --no-cache-dir --break-system-packages psycopg2-binary
 
 echo "[$(date)] System packages installed"
 
