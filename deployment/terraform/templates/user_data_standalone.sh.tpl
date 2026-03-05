@@ -252,6 +252,127 @@ LOG_LEVEL=INFO
 EOF
 
 ################################################################################
+# Create Asset Proxy Service Files
+################################################################################
+echo "[$(date)] Creating asset proxy service..."
+
+mkdir -p $INSTALL_DIR/deployment/asset-proxy
+
+cat > $INSTALL_DIR/deployment/asset-proxy/app.py <<'PROXY_APP_EOF'
+#!/usr/bin/env python3
+"""
+S3 Asset Proxy Service for STAC
+Generates presigned URLs for private S3 assets with requester-pays support
+"""
+import os
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
+import boto3
+import uvicorn
+
+app = FastAPI(title="STAC Asset Proxy")
+
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_methods=['GET', 'HEAD'],
+    allow_headers=['*'],
+)
+
+# S3 client with IAM role credentials
+s3_client = boto3.client('s3', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+
+# Presigned URL expiration (seconds)
+URL_EXPIRATION = int(os.environ.get('PRESIGNED_URL_EXPIRATION', '3600'))
+
+
+@app.get('/health')
+@app.head('/health')
+def health_check():
+    """Health check endpoint"""
+    return {'status': 'ok', 'service': 'asset-proxy'}
+
+
+@app.get('/s3/{bucket}/{path:path}')
+@app.head('/s3/{bucket}/{path:path}')
+def proxy_s3_asset(bucket: str, path: str):
+    """
+    Generate presigned URL for S3 asset and redirect.
+
+    Args:
+        bucket: S3 bucket name
+        path: Object key path
+
+    Returns:
+        302 redirect to presigned S3 URL
+    """
+    try:
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': bucket,
+                'Key': path,
+                'RequestPayer': 'requester'
+            },
+            ExpiresIn=URL_EXPIRATION
+        )
+        return RedirectResponse(url=presigned_url, status_code=302)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Asset not found: {str(e)}")
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get('PORT', '8083')),
+        log_level=os.environ.get('LOG_LEVEL', 'info').lower()
+    )
+PROXY_APP_EOF
+
+cat > $INSTALL_DIR/deployment/asset-proxy/requirements.txt <<'PROXY_REQ_EOF'
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+boto3==1.34.0
+PROXY_REQ_EOF
+
+cat > $INSTALL_DIR/deployment/asset-proxy/Dockerfile <<'PROXY_DOCKER_EOF'
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY app.py .
+
+# Run as non-root user for security
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8083/health')" || exit 1
+
+# Expose port
+EXPOSE 8083
+
+# Run application
+CMD ["python", "app.py"]
+PROXY_DOCKER_EOF
+
+if [ "$RUNTIME_USER" != "root" ]; then
+    sudo chown -R $RUNTIME_USER:$RUNTIME_USER $INSTALL_DIR/deployment/asset-proxy 2>/dev/null || true
+fi
+
+echo "[$(date)] Asset proxy service files created"
+
+################################################################################
 # Create Docker Compose File
 ################################################################################
 echo "[$(date)] Creating docker-compose configuration..."
@@ -339,6 +460,26 @@ services:
     depends_on:
       - stac-api
     restart: unless-stopped
+
+  asset-proxy:
+    container_name: benchmarkcat-asset-proxy
+    build:
+      context: ./asset-proxy
+      dockerfile: Dockerfile
+    environment:
+      - AWS_REGION=$${AWS_REGION}
+      - PRESIGNED_URL_EXPIRATION=3600
+      - PORT=8083
+      - LOG_LEVEL=info
+    ports:
+      - "8083:8083"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8083/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 COMPOSE_EOF
 
 # Modify docker-compose.yml for test mode (Docker-in-Docker)

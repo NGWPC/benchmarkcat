@@ -193,7 +193,7 @@ variable "additional_vpc_cidrs" {
 variable "app_ports" {
   description = "List of application ports to open on the EC2 instance Security Group (e.g., [8080, 8082])"
   type        = list(number)
-  default     = [8080, 8082]
+  default     = [8080, 8082, 8083]
 }
 
 variable "alb_target_port" {
