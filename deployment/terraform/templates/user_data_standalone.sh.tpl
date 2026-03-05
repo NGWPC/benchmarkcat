@@ -355,10 +355,6 @@ RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app
 USER appuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8083/health')" || exit 1
-
 # Expose port
 EXPOSE 8083
 
@@ -466,20 +462,13 @@ services:
     build:
       context: ./asset-proxy
       dockerfile: Dockerfile
+    network_mode: host
     environment:
       - AWS_REGION=$${AWS_REGION}
       - PRESIGNED_URL_EXPIRATION=3600
       - PORT=8083
       - LOG_LEVEL=info
-    ports:
-      - "8083:8083"
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8083/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 COMPOSE_EOF
 
 # Modify docker-compose.yml for test mode (Docker-in-Docker)
