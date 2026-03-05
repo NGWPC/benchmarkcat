@@ -23,7 +23,7 @@ security_group_ids = [
 max_vcpus      = 256
 instance_types = ["m5.xlarge", "m5.2xlarge", "r5.xlarge", "r5.2xlarge"]
 use_spot       = false  # set true for Spot
-ecr_force_delete = true  # set false for production
+ecr_force_delete = false  # set true for dev
 
 # Docker image tag (pin to a specific SHA or semver in production)
 image_tag = "latest"
