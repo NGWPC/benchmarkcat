@@ -19,6 +19,7 @@ BACKUP_DIR="/opt/backups/postgres"
 # AWS Configuration
 AWS_REGION=${aws_region}
 BACKUP_S3_URI="${backup_s3_uri}"
+DOMAIN_NAME="${domain_name}"
 
 # Database Configuration
 POSTGRES_USER="pgstac"
@@ -199,6 +200,8 @@ fi
 ################################################################################
 echo "[$(date)] Creating environment configuration..."
 
+PRIMARY_S3_BUCKET=$(echo "${s3_read_paths}" | cut -d',' -f1 | cut -d'/' -f1)
+
 cat > $INSTALL_DIR/deployment/.env <<EOF
 ################################################################################
 # BenchmarkCat STAC - OWP Environment Configuration
@@ -213,15 +216,17 @@ POSTGRES_HOST=database
 POSTGRES_PORT=5432
 
 # STAC API Configuration
+STAC_API_URL="http://$DOMAIN_NAME:8082"
 STAC_API_TITLE=OWP BenchmarkCat STAC API
 STAC_API_DESCRIPTION=Benchmark evaluation data catalog for NOAA OWP
 API_PORT=8082
 BROWSER_PORT=8080
+S3_BUCKET=$PRIMARY_S3_BUCKET
+S3_CATALOG_PATH="stac/"
 # Docker Image Versions
 PGSTAC_VERSION="v0.8.6"
 STAC_API_VERSION="latest"
 STAC_BROWSER_VERSION="latest"
-
 
 # AWS Configuration
 AWS_REGION=$AWS_REGION
@@ -313,6 +318,8 @@ services:
       - CPL_VSIL_CURL_ALLOWED_EXTENSIONS=$${CPL_VSIL_CURL_ALLOWED_EXTENSIONS}
       - GDAL_DISABLE_READDIR_ON_OPEN=$${GDAL_DISABLE_READDIR_ON_OPEN}
       - CPL_VSIL_CURL_USE_HEAD=$${CPL_VSIL_CURL_USE_HEAD}
+      - S3_BUCKET=$${S3_BUCKET}
+      - S3_CATALOG_PATH=$${S3_CATALOG_PATH}
     ports:
       - "8082:8082"
     depends_on:
@@ -325,7 +332,7 @@ services:
     container_name: benchmarkcat-browser
     image: ghcr.io/radiantearth/stac-browser:$${STAC_BROWSER_VERSION}
     environment:
-      - SB_catalogUrl=http://0.0.0.0:8082
+      - SB_catalogUrl=$${STAC_API_URL}
       - SB_maxPreviewsOnMap=0
     ports:
       - "8080:8080"
@@ -699,8 +706,6 @@ $INSTALL_DIR/deployment/health-check.sh
 ################################################################################
 # Print Summary
 ################################################################################
-DOMAIN_NAME="${domain_name}"
-
 cat <<SUMMARY
 
 ================================================================================
