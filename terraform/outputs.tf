@@ -38,7 +38,6 @@ output "job_definition_names" {
   value       = { for k, v in aws_batch_job_definition.jobs : k => v.name }
 }
 
-# Pipeline S3 config (consumed by submit_pipeline.py)
 output "s3_bucket" {
   description = "S3 bucket for all pipeline data"
   value       = var.s3_bucket

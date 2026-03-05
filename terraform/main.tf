@@ -93,13 +93,6 @@ resource "aws_cloudwatch_log_group" "batch" {
 
 # -----------------------------------------------------------------------------
 # Job Definitions — 6 total (split/worker/merge for GFM and GFM_EXP)
-#
-# Commands use Ref:: parameter substitution: AWS Batch replaces Ref::key with
-# the value of the corresponding key from the `parameters` map at submit time.
-#
-# The Dockerfile ENTRYPOINT is ./batch-entrypoint.sh, which runs:
-#   python3 -m "$@" [--job-index $AWS_BATCH_JOB_ARRAY_INDEX]
-# The `command` here becomes Docker CMD and is passed as $@ to the entrypoint.
 # -----------------------------------------------------------------------------
 locals {
   tags = {
