@@ -35,7 +35,7 @@ benchmarkcat/
 │   ├── gfm/v1.0.0/
 │   └── common_item_metadata/
 ├── scripts/                   # Utility scripts
-│   ├── submit_pipeline.py    # AWS Batch pipeline orchestrator
+│   ├── run_pipeline_prefect.py  # Prefect orchestrator for AWS Batch pipeline
 │   ├── build_and_push.sh     # Build & push Docker image to ECR
 │   ├── batch-entrypoint.sh   # Container entrypoint for batch jobs
 │   ├── stac_processor.py     # STAC catalog processing
@@ -189,7 +189,7 @@ docker run --rm \
 
 GFM and GFM expanded support a 3-phase batch workflow for scaling to many scenes. For local testing, run Phase 1, then Phase 2 (e.g. with `--job-index 0`), then Phase 3. All examples below use placeholder S3 paths under `benchmark/stac-bench-cat/` and `benchmark/rs/`; replace with your bucket and paths as needed.
 
-For AWS Batch deployment (Terraform, Docker build/push, and the `submit_pipeline.py` orchestrator), see **[docs/aws-batch-pipeline.md](docs/aws-batch-pipeline.md)**.
+For AWS Batch deployment (Terraform, Docker build/push, and the `run_pipeline_prefect.py` Prefect orchestrator), see **[docs/aws-batch-pipeline.md](docs/aws-batch-pipeline.md)**.
 
 Date filters (`--after-date`, `--before-date`, `--dates`) are applied **only at Phase 1 (batch_split)**. Phase 2 workers process their slice of the manifest as-is and do not re-apply date filters; this avoids double filtering. When Phase 1 uses date filters, a **sidecar metadata file** is written at `<manifest_s3_key>.meta.json` with `total_scenes`, `manifest_s3_key`, `created_at`, and when applicable `after_date`, `before_date`, and/or `dates` so you can see what filters were used when the manifest was built.
 

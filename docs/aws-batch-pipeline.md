@@ -10,7 +10,7 @@ Scale GFM and GFM Expanded ingestion to tens of thousands of scenes using a 3-ph
 | `terraform/terraform.tfvars` | All configurable values — gitignored; copy from `.tfvars.example` |
 | `terraform/terraform.tfvars.example` | Template with placeholder values for new setups |
 | `scripts/build_and_push.sh` | Build Docker image and push to ECR; reads `aws_account_id`, `aws_region`, `aws_profile` from terraform outputs (falls back to env vars) |
-| `scripts/submit_pipeline.py` | Python orchestrator — submits split → workers → merge with polling |
+| `scripts/run_pipeline_prefect.py` | Prefect orchestrator — submits split → workers → merge with async polling, retries, and UI observability |
 | `scripts/batch-entrypoint.sh` | Cloud-agnostic entrypoint; injects `--job-index` from `AWS_BATCH_JOB_ARRAY_INDEX`, `AZ_BATCH_TASK_ID`, or `BATCH_TASK_INDEX`; converts optional env vars `AFTER_DATE`, `BEFORE_DATE`, `DATES` into `--after-date`, `--before-date`, `--dates` for the split job when set |
 
 ---
@@ -53,9 +53,9 @@ flowchart LR
 - AWS account with permissions for Batch, ECR, S3, CloudWatch Logs
 - [Terraform](https://developer.hashicorp.com/terraform/install)
 - Docker (for building images)
-- Python with `boto3` installed
+- Python with `boto3` and `prefect` installed (`pip install boto3 prefect`)
 
-**Note:** `submit_pipeline.py` requires Terraform outputs. Run `terraform init` and `terraform apply` before submitting; otherwise the script exits with an error.
+**Note:** `run_pipeline_prefect.py` requires Terraform outputs. Run `terraform init` and `terraform apply` before submitting; otherwise the flow exits with an error.
 
 ---
 
@@ -95,9 +95,18 @@ Only needed when code changes (`ingest/`, `Dockerfile`, `scripts/batch-entrypoin
 
 ### 4. Submit the Pipeline
 
+**Optional:** start the Prefect UI first (in a separate terminal) to get live task-level observability:
+
+```bash
+prefect server start
+# UI available at http://127.0.0.1:4200
+```
+
+The flow runs fine without a server — Prefect just won't record state remotely.
+
 ```bash
 # GFM — full run
-python scripts/submit_pipeline.py \
+python scripts/run_pipeline_prefect.py \
   --pipeline gfm \
   --profile <your-aws-profile> \
   --s3-profile <your-s3-profile> \
@@ -105,7 +114,7 @@ python scripts/submit_pipeline.py \
   --poll-interval 45
 
 # GFM Expanded — with date filter
-python scripts/submit_pipeline.py \
+python scripts/run_pipeline_prefect.py \
   --pipeline gfm_exp \
   --after-date 2024-01-01 \
   --before-date 2024-06-30 \
@@ -113,14 +122,14 @@ python scripts/submit_pipeline.py \
   --s3-profile <your-s3-profile>
 
 # Dry run first (no jobs submitted)
-python scripts/submit_pipeline.py --pipeline gfm --dry-run
+python scripts/run_pipeline_prefect.py --pipeline gfm --dry-run
 ```
 
-The script submits Phase 1, polls until done, reads the manifest size from S3, computes the array size, submits Phase 2, polls, then submits Phase 3.
+The orchestrator runs a Prefect flow with an explicit Split → Workers → Merge task DAG. Each phase submits a Batch job, polls asynchronously until complete, and creates a Prefect artifact with job details. If a task fails, Prefect retries it before marking the flow as failed.
 
 ### 5. Monitor
 
-The script prints status every `--poll-interval` seconds (default 30). For array jobs it shows per-status counts (`RUNNING=12 SUCCEEDED=38 FAILED=0`). The script URL-prints the AWS Batch console link on completion.
+The orchestrator logs status every `--poll-interval` seconds (default 30). For array jobs it shows per-status counts (`RUNNING=12 SUCCEEDED=38 FAILED=0`). If Prefect server is running, the Prefect UI at `http://127.0.0.1:4200` shows the flow run with per-task artifacts and the pipeline summary table.
 
 CloudWatch logs:
 
@@ -151,7 +160,7 @@ Phase 2 can run for hours. For production, run the orchestrator under `tmux` on 
 ```bash
 tmux new -s benchmarkcat
 
-python scripts/submit_pipeline.py \
+python scripts/run_pipeline_prefect.py \
   --pipeline gfm \
   --scenes-per-job 50 \
   --profile <your-aws-profile> \
@@ -161,10 +170,10 @@ python scripts/submit_pipeline.py \
 
 ---
 
-## `submit_pipeline.py` Reference
+## `run_pipeline_prefect.py` Reference
 
 ```
-python scripts/submit_pipeline.py [options]
+python scripts/run_pipeline_prefect.py [options]
 ```
 
 | Flag | Default | Description |
@@ -224,7 +233,7 @@ All path variables are **required** — no defaults. Set them in `terraform/terr
 
 ## Troubleshooting
 
-**Terraform outputs not available**: The script exits with this error if Terraform is not initialized or applied. Run `cd terraform && terraform init && terraform apply` from the repo root, then run `submit_pipeline.py` again.
+**Terraform outputs not available**: The flow exits with this error if Terraform is not initialized or applied. Run `cd terraform && terraform init && terraform apply` from the repo root, then run `run_pipeline_prefect.py` again.
 
 **AccessDenied on S3 (orchestrator)**: The orchestrator reads the manifest metadata from S3 locally to compute array size. Use `--s3-profile <profile>` if your Batch profile lacks S3 permissions.
 

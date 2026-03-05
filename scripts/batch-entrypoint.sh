@@ -1,6 +1,5 @@
 #!/bin/bash
 # Translate the cloud provider's array-job index env var into --job-index
-# so application code stays cloud-agnostic.
 #
 #   AWS Batch:   AWS_BATCH_JOB_ARRAY_INDEX
 #   Azure Batch: AZ_BATCH_TASK_ID

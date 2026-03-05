@@ -32,6 +32,8 @@ resource "aws_ecr_repository" "app" {
   image_scanning_configuration {
     scan_on_push = false
   }
+
+  tags = local.tags
 }
 
 # -----------------------------------------------------------------------------
@@ -57,6 +59,8 @@ resource "aws_batch_compute_environment" "cpu" {
     spot_iam_fleet_role  = var.use_spot ? var.spot_fleet_role_arn : null
   }
 
+  tags = local.tags
+
   lifecycle {
     create_before_destroy = true
   }
@@ -74,6 +78,8 @@ resource "aws_batch_job_queue" "pipeline" {
     order               = 1
     compute_environment = aws_batch_compute_environment.cpu.arn
   }
+
+  tags = local.tags
 }
 
 # -----------------------------------------------------------------------------
@@ -82,6 +88,7 @@ resource "aws_batch_job_queue" "pipeline" {
 resource "aws_cloudwatch_log_group" "batch" {
   name              = "/aws/batch/${var.project_name}"
   retention_in_days = var.log_retention_days
+  tags              = local.tags
 }
 
 # -----------------------------------------------------------------------------
@@ -95,6 +102,10 @@ resource "aws_cloudwatch_log_group" "batch" {
 # The `command` here becomes Docker CMD and is passed as $@ to the entrypoint.
 # -----------------------------------------------------------------------------
 locals {
+  tags = {
+    Project = var.project_name
+  }
+
   job_definitions = {
     "gfm-split" = {
       vcpus   = var.split_vcpus
@@ -186,8 +197,10 @@ locals {
 resource "aws_batch_job_definition" "jobs" {
   for_each = local.job_definitions
 
-  name = "${var.project_name}-${each.key}"
-  type = "container"
+  name            = "${var.project_name}-${each.key}"
+  type            = "container"
+  propagate_tags  = true
+  tags            = local.tags
 
   timeout {
     attempt_duration_seconds = each.value.timeout
