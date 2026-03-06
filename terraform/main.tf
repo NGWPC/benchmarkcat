@@ -127,6 +127,7 @@ locals {
         "--manifest-s3-key", "Ref::manifest_s3_key",
         "--partial-parquet-prefix", "Ref::partial_parquet_prefix",
         "--scenes-per-job", "Ref::scenes_per_job",
+        "--workers", "Ref::workers",
       ]
     }
     "gfm-merge" = {
@@ -169,6 +170,7 @@ locals {
         "--manifest-s3-key", "Ref::manifest_s3_key",
         "--partial-parquet-prefix", "Ref::partial_parquet_prefix",
         "--scenes-per-job", "Ref::scenes_per_job",
+        "--workers", "Ref::workers",
       ]
     }
     "gfm-exp-merge" = {

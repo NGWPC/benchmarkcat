@@ -72,6 +72,10 @@ def build_config(args, tf_outputs: dict) -> dict:
         args.scenes_per_job if args.scenes_per_job is not None
         else tf_outputs.get("scenes_per_job", 50)
     )
+    cfg["workers"] = (
+        args.workers if args.workers is not None
+        else tf_outputs.get("workers", 1)
+    )
     cfg["project_name"] = (
         args.project_name if args.project_name is not None
         else tf_outputs.get("project_name")
@@ -170,6 +174,7 @@ def _make_args(
     dates: str | None = None,
     bucket_name: str | None = None,
     scenes_per_job: int | None = None,
+    workers: int | None = None,
     profile: str | None = None,
     s3_profile: str | None = None,
     region: str | None = None,
@@ -185,6 +190,7 @@ def _make_args(
         dates=dates,
         bucket_name=bucket_name,
         scenes_per_job=scenes_per_job,
+        workers=workers,
         profile=profile,
         s3_profile=s3_profile,
         region=region,
@@ -369,6 +375,7 @@ async def submit_and_poll_workers(
         "manifest_s3_key": cfg["manifest_s3_key"],
         "partial_parquet_prefix": cfg["partial_parquet_prefix"],
         "scenes_per_job": str(scenes_per_job),
+        "workers": str(cfg["workers"]),
     }
 
     worker_job_name = f"{pipeline}-worker-{timestamp}"
@@ -478,6 +485,7 @@ def run_pipeline_flow(
     dates: str | None = None,
     bucket_name: str | None = None,
     scenes_per_job: int | None = None,
+    workers: int | None = None,
     profile: str | None = None,
     s3_profile: str | None = None,
     region: str | None = None,
@@ -502,6 +510,7 @@ def run_pipeline_flow(
         dates=dates,
         bucket_name=bucket_name,
         scenes_per_job=scenes_per_job,
+        workers=workers,
         profile=profile,
         s3_profile=s3_profile,
         region=region,
@@ -628,6 +637,12 @@ def parse_args():
         default=None,
         help="Override scenes per worker (default: terraform output or 50)",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Override parallel workers per job (default: terraform output or 1)",
+    )
     parser.add_argument("--after-date", default=None, help="Only scenes >= YYYY-MM-DD")
     parser.add_argument("--before-date", default=None, help="Only scenes <= YYYY-MM-DD")
     parser.add_argument("--dates", default=None, help="Comma-separated specific dates (YYYY-MM-DD)")
@@ -668,6 +683,7 @@ if __name__ == "__main__":
         dates=args.dates,
         bucket_name=args.bucket_name,
         scenes_per_job=args.scenes_per_job,
+        workers=args.workers,
         profile=args.profile,
         s3_profile=args.s3_profile,
         region=args.region,

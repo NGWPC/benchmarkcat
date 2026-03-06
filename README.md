@@ -413,7 +413,7 @@ GFM and GFM Expanded additionally support:
 - `--boundaries_object_key`: S3 key for Mexico/Canada boundaries (GFM/GFM-exp; used to skip non-CONUS scenes)
 - **Date filters:** `--after-date` (YYYY-MM-DD), `--before-date` (YYYY-MM-DD), `--dates` (comma-separated list). Limit processing to a date range or specific dates. **GFM-exp:** filters by date folder (top-level PI4 dirs). **GFM:** filters by scene acquisition date (parsed from Sentinel product name in path). Applied in order: after_date, then before_date, then dates list.
 
-Batch-worker mode (GFM/GFM-exp) also uses: `--mode batch-worker`, `--manifest-s3-key`, `--partial-parquet-prefix`, `--job-index` (or `AWS_BATCH_JOB_ARRAY_INDEX`, `AZ_BATCH_TASK_ID`, `BATCH_TASK_INDEX`), `--scenes-per-job`
+Batch-worker mode (GFM/GFM-exp) also uses: `--mode batch-worker`, `--manifest-s3-key`, `--partial-parquet-prefix`, `--job-index` (or `AWS_BATCH_JOB_ARRAY_INDEX`, `AZ_BATCH_TASK_ID`, `BATCH_TASK_INDEX`), `--scenes-per-job`, `--workers`
 
 ### Processing Pipeline
 

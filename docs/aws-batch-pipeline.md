@@ -184,6 +184,7 @@ python scripts/run_pipeline_prefect.py [options]
 | `--pipeline`       | *(required)*        | `gfm` or `gfm_exp`                                  |
 | `--bucket-name`    | from terraform      | Override S3 bucket                                  |
 | `--scenes-per-job` | from terraform      | Scenes per array child (controls array size)        |
+| `--workers`        | from terraform      | Parallel workers per job (passed to worker phase)   |
 | `--after-date`     | —                   | Only include scenes ≥ YYYY-MM-DD (split phase only) |
 | `--before-date`    | —                   | Only include scenes ≤ YYYY-MM-DD (split phase only) |
 | `--dates`          | —                   | Comma-separated specific dates (split phase only)   |
@@ -197,7 +198,7 @@ python scripts/run_pipeline_prefect.py [options]
 
 Date filters apply **only to Phase 1 (split)**. They are passed to the split job via container environment (not Batch parameters), so they can be omitted when not needed; the entrypoint converts them to CLI args when set. Workers process their manifest slice as-is; they do not re-apply date filters. A sidecar `<manifest>.meta.json` is written with `total_scenes` and any active filters for auditing.
 
-**Single source of truth:** Terraform is the source of truth for infrastructure and config. CLI overrides apply to: `--bucket-name`, `--scenes-per-job`, `--profile`, `--region`, `--project-name`, and date filters. S3 paths (`catalog_path`, `manifest_s3_key`, etc.) come only from Terraform — change them in `terraform.tfvars` and run `terraform apply`.
+**Single source of truth:** Terraform is the source of truth for infrastructure and config. CLI overrides apply to: `--bucket-name`, `--scenes-per-job`, `--workers`, `--profile`, `--region`, `--project-name`, and date filters. S3 paths (`catalog_path`, `manifest_s3_key`, etc.) come only from Terraform — change them in `terraform.tfvars` and run `terraform apply`.
 
 ---
 
@@ -227,6 +228,7 @@ All path variables are **required** — no defaults. Set them in `terraform/terr
 | ---------------------------- | -------------------------------------------------------------- |
 | `s3_bucket`                  | S3 bucket for all I/O                                          |
 | `scenes_per_job`             | Default scenes per worker; controls array size (default: `50`) |
+| `workers`                    | Default parallel workers per job (default: `1`)                |
 | `catalog_path`               | Root catalog prefix                                            |
 | `hucs_object_key`            | S3 key for HUC8 boundaries GeoPackage                          |
 | `boundaries_object_key`      | S3 key for country boundaries GeoPackage                       |

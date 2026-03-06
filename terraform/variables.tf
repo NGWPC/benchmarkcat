@@ -180,6 +180,12 @@ variable "scenes_per_job" {
   default     = 50
 }
 
+variable "workers" {
+  description = "Number of parallel workers per scene in worker job (1 = sequential)"
+  type        = number
+  default     = 1
+}
+
 variable "catalog_path" {
   description = "S3 prefix for the STAC catalog"
   type        = string

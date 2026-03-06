@@ -48,6 +48,11 @@ output "scenes_per_job" {
   value       = var.scenes_per_job
 }
 
+output "workers" {
+  description = "Default workers per job"
+  value       = var.workers
+}
+
 output "catalog_path" {
   description = "S3 prefix for the STAC catalog"
   value       = var.catalog_path
