@@ -9,3 +9,10 @@ __pycache__
 
 test-data/
 stac/
+
+# Terraform local state and binaries
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
