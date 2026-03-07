@@ -11,8 +11,8 @@ How to run:
      Keep it running. Default UI at http://127.0.0.1:4200
 
   2. Run the flow (another terminal, from repo root):
-       python scripts/run_pipeline_prefect.py --pipeline gfm
        python scripts/run_pipeline_prefect.py --pipeline gfm --dry-run
+       python scripts/run_pipeline_prefect.py --pipeline gfm
 
   If the server runs elsewhere (e.g. EC2), set PREFECT_API_URL before running:
        export PREFECT_API_URL="http://<host>:4200/api"
@@ -163,39 +163,6 @@ REQUIRED_CFG_KEYS = [
     "hucs_object_key",
     "boundaries_object_key",
 ]
-
-
-def _make_args(
-    pipeline: str,
-    dry_run: bool = False,
-    poll_interval: int = 30,
-    after_date: str | None = None,
-    before_date: str | None = None,
-    dates: str | None = None,
-    bucket_name: str | None = None,
-    scenes_per_job: int | None = None,
-    workers: int | None = None,
-    profile: str | None = None,
-    s3_profile: str | None = None,
-    region: str | None = None,
-    project_name: str | None = None,
-) -> argparse.Namespace:
-    """Build an args-like Namespace for build_config()  (local helper)."""
-    return argparse.Namespace(
-        pipeline=pipeline,
-        dry_run=dry_run,
-        poll_interval=poll_interval,
-        after_date=after_date,
-        before_date=before_date,
-        dates=dates,
-        bucket_name=bucket_name,
-        scenes_per_job=scenes_per_job,
-        workers=workers,
-        profile=profile,
-        s3_profile=s3_profile,
-        region=region,
-        project_name=project_name,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -476,22 +443,9 @@ async def submit_and_poll_merge(
     description="3-phase AWS Batch pipeline (Split → Workers → Merge)",
     log_prints=True,
 )
-def run_pipeline_flow(
-    pipeline: str,
-    dry_run: bool = False,
-    poll_interval: int = 30,
-    after_date: str | None = None,
-    before_date: str | None = None,
-    dates: str | None = None,
-    bucket_name: str | None = None,
-    scenes_per_job: int | None = None,
-    workers: int | None = None,
-    profile: str | None = None,
-    s3_profile: str | None = None,
-    region: str | None = None,
-    project_name: str | None = None,
-) -> dict:
+def run_pipeline_flow(**kwargs) -> dict:
     """Run the benchmarkcat 3-phase Batch pipeline as a Prefect flow."""
+    args = argparse.Namespace(**kwargs)
     logger = get_run_logger()
 
     tf_outputs = get_terraform_outputs()
@@ -501,21 +455,6 @@ def run_pipeline_flow(
             "  cd terraform && terraform init && terraform apply"
         )
 
-    args = _make_args(
-        pipeline=pipeline,
-        dry_run=dry_run,
-        poll_interval=poll_interval,
-        after_date=after_date,
-        before_date=before_date,
-        dates=dates,
-        bucket_name=bucket_name,
-        scenes_per_job=scenes_per_job,
-        workers=workers,
-        profile=profile,
-        s3_profile=s3_profile,
-        region=region,
-        project_name=project_name,
-    )
     cfg = build_config(args, tf_outputs)
 
     missing = [k for k in REQUIRED_CFG_KEYS if cfg.get(k) is None]
@@ -527,7 +466,7 @@ def run_pipeline_flow(
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     logger.info(
-        "Benchmarkcat Batch Pipeline — %s (dry_run=%s)", pipeline.upper(), dry_run
+        "Benchmarkcat Batch Pipeline — %s (dry_run=%s)", args.pipeline.upper(), args.dry_run
     )
     logger.info(
         "Queue: %s  Bucket: %s  Manifest: %s",
@@ -539,30 +478,30 @@ def run_pipeline_flow(
     # -----------------------------------------------------------------
     split_future = submit_and_poll_split.submit(
         cfg=cfg,
-        pipeline=pipeline,
+        pipeline=args.pipeline,
         timestamp=timestamp,
-        poll_interval=poll_interval,
-        dry_run=dry_run,
-        after_date=after_date,
-        before_date=before_date,
-        dates=dates,
+        poll_interval=args.poll_interval,
+        dry_run=args.dry_run,
+        after_date=args.after_date,
+        before_date=args.before_date,
+        dates=args.dates,
     )
 
     workers_future = submit_and_poll_workers.submit(
         cfg=cfg,
-        pipeline=pipeline,
+        pipeline=args.pipeline,
         timestamp=timestamp,
-        poll_interval=poll_interval,
-        dry_run=dry_run,
+        poll_interval=args.poll_interval,
+        dry_run=args.dry_run,
         wait_for=[split_future],
     )
 
     merge_future = submit_and_poll_merge.submit(
         cfg=cfg,
-        pipeline=pipeline,
+        pipeline=args.pipeline,
         timestamp=timestamp,
-        poll_interval=poll_interval,
-        dry_run=dry_run,
+        poll_interval=args.poll_interval,
+        dry_run=args.dry_run,
         wait_for=[workers_future],
     )
 
@@ -591,21 +530,21 @@ def run_pipeline_flow(
                 "Job ID": str(merge_result["job_id"] or "DRY RUN"),
             },
         ],
-        description=f"Pipeline '{pipeline}' — all three phase job IDs",
+        description=f"Pipeline '{args.pipeline}' — all three phase job IDs",
     )
 
     summary = {
-        "pipeline": pipeline,
-        "dry_run": dry_run,
+        "pipeline": args.pipeline,
+        "dry_run": args.dry_run,
         "split_job_id": split_result["job_id"],
         "worker_job_id": workers_result["job_id"],
         "merge_job_id": merge_result["job_id"]
     }
 
-    if not dry_run:
+    if not args.dry_run:
         logger.info(
             "Pipeline '%s' complete. Split: %s  Workers: %s  Merge: %s",
-            pipeline,
+            args.pipeline,
             summary["split_job_id"],
             summary["worker_job_id"],
             summary["merge_job_id"],
@@ -673,19 +612,4 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    run_pipeline_flow(
-        pipeline=args.pipeline,
-        dry_run=args.dry_run,
-        poll_interval=args.poll_interval,
-        after_date=args.after_date,
-        before_date=args.before_date,
-        dates=args.dates,
-        bucket_name=args.bucket_name,
-        scenes_per_job=args.scenes_per_job,
-        workers=args.workers,
-        profile=args.profile,
-        s3_profile=args.s3_profile,
-        region=args.region,
-        project_name=args.project_name,
-    )
+    run_pipeline_flow(**vars(parse_args()))
