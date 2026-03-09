@@ -3,16 +3,17 @@ BenchmarkCat STAC Deployment Guide
 OVERVIEW
 ========
 Deployment of BenchmarkCat STAC Catalog on AWS for OWP:
-- EC2-based STAC API (Docker Compose: PostgreSQL + pgstac, STAC API, STAC Browser)
+- EC2-based STAC API (Docker Compose: PostgreSQL + pgstac, STAC API, STAC Browser, asset proxy service)
 - S3 storage (~1.5 TB geospatial assets + STAC metadata)
 - Cross-account S3 migration from NGWPC to OWP
 
 ARCHITECTURE
 ============
 - EC2 Instance: t3.xlarge (4 vCPU, 16 GB RAM)
-- Services: PostgreSQL (5432), STAC API (8082), STAC Browser (8080)
+- Services: PostgreSQL (5432), STAC API (8082), STAC Browser (8080), asset-proxy service (8083)
 - Storage: S3 bucket with stac/, data/, docs/ directories
-- Bootstrap: Automated via owp-bootstrap.sh user-data script
+- Bootstrap: Automated via deployment/terraform/templates/user_data_standalone.sh.tpl. 
+   Can be executed manually: deployment/terraform/user-data/owp-bootstrap.sh
 
 
 DEPLOYMENT PHASES
@@ -25,19 +26,16 @@ Internal NGWPC Testing:
 Infrastructure team will provision via Terraform:
 - Security Group (owp-benchmarkcat-sg)
 - IAM Role (owp-benchmarkcat-s3-access)
-- EC2 Key Pair (owp-benchmarkcat-key)
 - EC2 Instance with bootstrap script
 
 Post-Provisioning:
-- Retrieve EC2 public IP from infrastructure team
-- Verify SSH access with provided key pair
-- Monitor bootstrap progress: tail -f /var/log/benchmarkcat/bootstrap.log
+- Retrieve EC2 public IP
+- Verify SSH access with defined key pair
+- Verify bootstrap success: `cat /var/log/benchmarkcat/bootstrap.log`
 
 Handoff to OWP:
 Initial setup:
-- Iniitialize Terraform (`terraform init`)
-- Review planned infrastructure changes (`terraform plan -out=tfplan`)
-- Apply infrastructure (`terraform apply tfplan`)
+- Follow Steps in terraform/README.md
 
 Post-Apply:
 - Retrieve EC2 public IP (`terraform output`)
@@ -49,12 +47,12 @@ can be referenced from terraform code, and provisioned using the AWS console.
 
 2. BOOTSTRAP SCRIPT EXECUTION (Automated - for reference)
 ------------------------------
-Script: terraform/user-data/owp-bootstrap.sh
+Script: deployment/terraform/templates/user_data_standalone.sh.tpl
 
 Automated Setup:
 - System packages (Docker, Python, AWS CLI, PostgreSQL client)
 - Directory structure (/opt/benchmarkcat, /var/log/benchmarkcat)
-- Docker Compose stack (database, stac-api, stac-browser)
+- Docker Compose stack (database, stac-api, stac-browser, asset-proxy)
 - Management scripts (health-check, backup, restart)
 - Systemd service for auto-start
 - Weekly automated backups (cron)
@@ -117,6 +115,40 @@ Success Criteria:
 - All items accessible via API
 
 
+5. REWRITE ASSET URLS
+------------------
+Script: deployment/scripts/rewrite_asset_urls.py
+
+Prerequisites:
+- Asset-proxy service running on port 8083
+- Database password available (PGPASSWORD env var or /opt/benchmarkcat/.db_password)
+
+Process:
+1. Test asset-proxy functionality:
+   sudo ./deployment/scripts/test_asset_proxy.sh
+
+2. Get host IP for VPC access:
+   export HOST_IP=$(hostname -I | awk '{print $1}')
+
+3. Get database password
+   export PGPASSWORD=$(grep POSTGRES_PASSWORD /var/log/benchmarkcat/bootstrap.log | sed 's/.*POSTGRES_PASSWORD=//')
+
+4. Dry run to preview changes:
+   python3 rewrite_asset_urls.py --proxy-url http://${HOST_IP}:8083 --db-host localhost --db-password $PGPASSWORD --dry-run
+
+5. Apply URL rewrites:
+   python3 rewrite_asset_urls.py --proxy-url http://${HOST_IP}:8083 --db-host localhost --db-password $PGPASSWORD
+
+6. Verify in STAC Browser:
+   Open http://${HOST_IP}:8080 and check that assets load correctly
+
+Success Criteria:
+- Asset-proxy test passes
+- All S3 URLs rewritten to proxy format
+- Assets render correctly in browser
+
+
+
 5. COMPONENT TESTING
 ---------------------
 
@@ -136,9 +168,15 @@ TC2.4: GDAL VSI S3 Access
 - Test direct S3 asset access via GDAL Virtual File System
 - Verify no authentication errors
 
+TC2.5: Asset Proxy Service
+- Test: sudo ./deployment/scripts/test_asset_proxy.sh
+- Verify: Proxy returns S3 assets correctly with Range header support
+
 Commands:
-  curl http://localhost:8082/collections
-  curl http://localhost:8080/
+  export HOST_IP=$(hostname -I | awk '{print $1}')
+  curl http://${HOST_IP}:8082/collections
+  curl http://${HOST_IP}:8080/
+  curl http://${HOST_IP}:8083/s3/bucket/key
   docker ps
   /opt/benchmarkcat/deployment/health-check.sh
 
@@ -150,11 +188,12 @@ Health Checks:
 - /opt/benchmarkcat/deployment/health-check.sh
 - systemctl status benchmarkcat
 - docker ps
-- docker stats
+- docker stats --no-stream
 
 Service Access:
 - STAC API: http://<ec2-ip>:8082
 - STAC Browser: http://<ec2-ip>:8080
+- Asset Proxy: http://<ec2-ip>:8083
 - SSH: ssh -i ~/.ssh/owp-benchmarkcat-key.pem ubuntu@<ec2-ip>
 
 Backup Verification:
@@ -177,16 +216,19 @@ Migration:
 □ Asset HREFs updated to new S3 bucket
 
 Application:
-□ Docker Compose stack running (3 containers)
+□ Docker Compose stack running (4 containers)
 □ PostgreSQL initialized with pgstac
 □ STAC API responding on port 8082
 □ STAC Browser accessible on port 8080
+□ Asset-proxy service running on port 8083
 
 Testing:
-□ All component tests passed (TC2.1 - TC2.4)
+□ All component tests passed (TC2.1 - TC2.5)
 □ Health check script passes
 □ External access verified
 □ GDAL VSI S3 access confirmed
+□ Asset-proxy test passes
+□ Asset URLs rewritten to use proxy
 
 Operations:
 □ Systemd service enabled for auto-start
@@ -204,12 +246,14 @@ If deployment fails:
 
 OPERATIONAL SCRIPTS
 ===================
-Health Check:     /opt/benchmarkcat/deployment/health-check.sh
-Restart Services: /opt/benchmarkcat/deployment/restart-services.sh
-Stop Services:    /opt/benchmarkcat/deployment/stop-services.sh
-Start Services:   /opt/benchmarkcat/deployment/start-services.sh
-View Logs:        /opt/benchmarkcat/deployment/view-logs.sh
-Backup Database:  /opt/benchmarkcat/deployment/backup-db.sh
+Health Check:        /opt/benchmarkcat/deployment/health-check.sh
+Restart Services:    /opt/benchmarkcat/deployment/restart-services.sh
+Stop Services:       /opt/benchmarkcat/deployment/stop-services.sh
+Start Services:      /opt/benchmarkcat/deployment/start-services.sh
+View Logs:           /opt/benchmarkcat/deployment/view-logs.sh
+Backup Database:     /opt/benchmarkcat/deployment/backup-db.sh
+Test Asset Proxy:    deployment/scripts/test_asset_proxy.sh
+Rewrite Asset URLs:  deployment/scripts/rewrite_asset_urls.py
 
 
 REFERENCES
