@@ -135,6 +135,12 @@ def parse_arguments():
         default=None,
         help="S3 prefix where per-job partial parquets are written (required in batch-worker mode).",
     )
+    parser.add_argument(
+        "--dfo-geopackage-object-key",
+        type=str,
+        required=True,
+        help="S3 key for the DFO USA events GeoPackage.",
+    )
     return parser.parse_args()
 
 
@@ -599,6 +605,7 @@ def _process_one_scene(
     country_boundaries,
     derived_metadata_path,
     initial_results_df=None,
+    dfo_geopackage_object_key=None,
 ):
     """Top-level worker for parallel scene processing. Creates own s3_utils and asset_handler."""
     dfo_path, event_id, sent_ti_path = work_item
@@ -613,7 +620,9 @@ def _process_one_scene(
 
     s3_utils = initialize_s3_utils(profile=profile)
     asset_handler = GFMAssetHandler(
-        s3_utils, bucket_name, derived_metadata_path, initial_results_df=initial_results_df
+        s3_utils, bucket_name, derived_metadata_path,
+        dfo_geopackage_object_key=dfo_geopackage_object_key,
+        initial_results_df=initial_results_df,
     )
     item, asset_results = process_tile(
         sent_ti_path,
@@ -661,7 +670,10 @@ def main_batch_worker(args):
     logging.info("Batch worker %d: processing %d scenes (indices %d–%d)",
                  job_index, len(my_scenes), start, start + len(my_scenes) - 1)
 
-    asset_handler = GFMAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
+    asset_handler = GFMAssetHandler(
+        s3_utils, args.bucket_name, args.derived_metadata_path,
+        dfo_geopackage_object_key=args.dfo_geopackage_object_key,
+    )
     catalog_id = "gfm-collection"
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     item_buffer = []
@@ -712,6 +724,7 @@ def main_batch_worker(args):
                 country_boundaries=country_boundaries,
                 derived_metadata_path=args.derived_metadata_path,
                 initial_results_df=None,
+                dfo_geopackage_object_key=args.dfo_geopackage_object_key,
             )
             with multiprocessing.Pool(args.workers) as pool:
                 for result in pool.imap_unordered(worker, work_items):
@@ -761,7 +774,10 @@ def main():
 
     collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
-    asset_handler = GFMAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
+    asset_handler = GFMAssetHandler(
+        s3_utils, args.bucket_name, args.derived_metadata_path,
+        dfo_geopackage_object_key=args.dfo_geopackage_object_key,
+    )
     catalog_id = "gfm-collection"
     item_buffer = []
     items_merged = [0]  # mutable so callback can update

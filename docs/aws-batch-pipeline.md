@@ -224,19 +224,20 @@ All variables are declared in `terraform/variables.tf`. Required variables (no d
 All path variables are **required** — no defaults. Set them in `terraform/terraform.tfvars`.
 
 
-| Variable                     | Description                                                    |
-| ---------------------------- | -------------------------------------------------------------- |
-| `s3_bucket`                  | S3 bucket for all I/O                                          |
-| `scenes_per_job`             | Default scenes per worker; controls array size (default: `50`) |
-| `workers`                    | Default parallel workers per job (default: `1`)                |
-| `catalog_path`               | Root catalog prefix                                            |
-| `hucs_object_key`            | S3 key for HUC8 boundaries GeoPackage                          |
-| `boundaries_object_key`      | S3 key for country boundaries GeoPackage                       |
-| `gfm_asset_object_key`       | GFM source data prefix                                         |
-| `gfm_manifest_s3_key`        | GFM manifest JSONL key                                         |
-| `gfm_partial_parquet_prefix` | GFM partial parquets prefix                                    |
-| `gfm_derived_metadata_path`  | GFM master parquet key                                         |
-| `gfm_exp_`*                  | GFM Expanded equivalents (same pattern)                        |
+| Variable                        | Description                                                    |
+| ------------------------------- | -------------------------------------------------------------- |
+| `s3_bucket`                     | S3 bucket for all I/O                                          |
+| `scenes_per_job`                | Default scenes per worker; controls array size (default: `50`) |
+| `workers`                       | Default parallel workers per job (default: `1`)                |
+| `catalog_path`                  | Root catalog prefix                                            |
+| `hucs_object_key`               | S3 key for HUC8 boundaries GeoPackage                          |
+| `boundaries_object_key`         | S3 key for country boundaries GeoPackage                       |
+| `gfm_asset_object_key`          | GFM source data prefix                                         |
+| `gfm_manifest_s3_key`           | GFM manifest JSONL key                                         |
+| `gfm_partial_parquet_prefix`    | GFM partial parquets prefix                                    |
+| `gfm_derived_metadata_path`     | GFM master parquet key                                         |
+| `gfm_dfo_geopackage_object_key` | S3 key for DFO USA events GeoPackage (GFM worker; required)    |
+| `gfm_exp_`*                     | GFM Expanded equivalents (same pattern)                        |
 
 
 ---

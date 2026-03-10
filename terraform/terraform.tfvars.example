@@ -43,10 +43,11 @@ hucs_object_key       = "benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg"
 boundaries_object_key = "benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg"
 
 # GFM paths
-gfm_asset_object_key       = "data-gfm/"
-gfm_manifest_s3_key        = "stac/batch/gfm_manifest.jsonl"
-gfm_partial_parquet_prefix = "stac/batch/gfm_partials"
-gfm_derived_metadata_path  = "stac/assets/gfm_collection.parquet"
+gfm_asset_object_key          = "data-gfm/"
+gfm_manifest_s3_key           = "stac/batch/gfm_manifest.jsonl"
+gfm_partial_parquet_prefix    = "stac/batch/gfm_partials"
+gfm_derived_metadata_path     = "stac/assets/gfm_collection.parquet"
+gfm_dfo_geopackage_object_key = "benchmark/rs/dfo_all_usa_events_post_2015.gpkg"
 
 # GFM_EXP paths
 gfm_exp_asset_object_key       = "data-gfm-exp/"

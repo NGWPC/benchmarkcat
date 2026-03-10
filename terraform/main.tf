@@ -128,6 +128,7 @@ locals {
         "--partial-parquet-prefix", "Ref::partial_parquet_prefix",
         "--scenes-per-job", "Ref::scenes_per_job",
         "--workers", "Ref::workers",
+        "--dfo-geopackage-object-key", "Ref::dfo_geopackage_object_key",
       ]
     }
     "gfm-merge" = {

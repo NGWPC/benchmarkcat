@@ -71,10 +71,11 @@ output "boundaries_object_key" {
 output "gfm_config" {
   description = "GFM pipeline S3 paths"
   value = {
-    asset_object_key       = var.gfm_asset_object_key
-    manifest_s3_key        = var.gfm_manifest_s3_key
-    partial_parquet_prefix = var.gfm_partial_parquet_prefix
-    derived_metadata_path  = var.gfm_derived_metadata_path
+    asset_object_key            = var.gfm_asset_object_key
+    manifest_s3_key             = var.gfm_manifest_s3_key
+    partial_parquet_prefix      = var.gfm_partial_parquet_prefix
+    derived_metadata_path       = var.gfm_derived_metadata_path
+    dfo_geopackage_object_key   = var.gfm_dfo_geopackage_object_key
   }
 }
 

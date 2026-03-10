@@ -222,6 +222,11 @@ variable "gfm_derived_metadata_path" {
   type        = string
 }
 
+variable "gfm_dfo_geopackage_object_key" {
+  description = "S3 key for the DFO USA events GeoPackage used by GFM for event geometry and main cause"
+  type        = string
+}
+
 # GFM_EXP pipeline paths
 variable "gfm_exp_asset_object_key" {
   description = "S3 prefix for GFM_EXP source data (PI4 date directories)"

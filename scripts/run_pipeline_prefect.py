@@ -99,6 +99,7 @@ def build_config(args, tf_outputs: dict) -> dict:
     cfg["manifest_s3_key"] = tf_pipeline.get("manifest_s3_key")
     cfg["partial_parquet_prefix"] = tf_pipeline.get("partial_parquet_prefix")
     cfg["derived_metadata_path"] = tf_pipeline.get("derived_metadata_path")
+    cfg["dfo_geopackage_object_key"] = tf_pipeline.get("dfo_geopackage_object_key")
 
     return cfg
 
@@ -344,6 +345,13 @@ async def submit_and_poll_workers(
         "scenes_per_job": str(scenes_per_job),
         "workers": str(cfg["workers"]),
     }
+    if pipeline == "gfm":
+        if not cfg.get("dfo_geopackage_object_key"):
+            raise RuntimeError(
+                "Missing dfo_geopackage_object_key for GFM pipeline. "
+                "Set gfm_dfo_geopackage_object_key in terraform.tfvars and run terraform apply."
+            )
+        worker_params["dfo_geopackage_object_key"] = cfg["dfo_geopackage_object_key"]
 
     worker_job_name = f"{pipeline}-worker-{timestamp}"
     worker_job_id = submit_job(
