@@ -19,7 +19,6 @@ logs/
 test-data/
 README.md
 schemas/
-scripts/
 stac/
 
 # Local STAC output

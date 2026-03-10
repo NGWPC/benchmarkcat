@@ -40,29 +40,29 @@ def initialize_s3_utils(profile: str | None = None):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--link_type", type=str, default="uri", help='Link type, either "url" or "uri"')
-    parser.add_argument("--bucket_name", type=str, default="fimc-data", help="S3 bucket name")
+    parser.add_argument("--bucket_name", type=str, required=True, help="S3 bucket name")
     parser.add_argument(
         "--catalog_path",
         type=str,
-        default="benchmark/stac-bench-cat/",
+        required=True,
         help="Path to the STAC catalog in the S3 bucket",
     )
     parser.add_argument(
         "--asset_object_key",
         type=str,
-        default="benchmark/rs/PI4/",
-        help="Key for the asset object in the S3 bucket",
+        required=True,
+        help="S3 prefix for GFM_EXP source data (PI4 date directories)",
     )
     parser.add_argument(
         "--hucs_object_key",
         type=str,
-        default="benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg",
-        help="Where to download the gpkg with the huc8 info",
+        required=True,
+        help="S3 key for the HUC8 GeoPackage",
     )
     parser.add_argument(
         "--boundaries_object_key",
         type=str,
-        default="benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg",
+        required=True,
         help="S3 key for the Mexico/Canada boundaries GeoPackage",
     )
     parser.add_argument(
@@ -73,7 +73,7 @@ def parse_arguments():
     parser.add_argument(
         "--derived_metadata_path",
         type=str,
-        default="benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet",
+        required=True,
         help="S3 key for the derived metadata Parquet file created by asset handling code.",
     )
     parser.add_argument(
@@ -134,7 +134,7 @@ def parse_arguments():
         "--job-index",
         type=int,
         default=None,
-        help="Array job index; defaults to AWS_BATCH_JOB_ARRAY_INDEX env var, then 0.",
+        help="Array job index (0-based). Set by entrypoint.sh from the cloud provider's env var.",
     )
     parser.add_argument(
         "--scenes-per-job",
@@ -147,6 +147,12 @@ def parse_arguments():
         type=str,
         default=None,
         help="S3 prefix where per-job partial parquets are written (required in batch-worker mode).",
+    )
+    parser.add_argument(
+        "--readme-object-key",
+        type=str,
+        required=True,
+        help="S3 key for GFM data readme PDF.",
     )
     return parser.parse_args()
 
@@ -183,7 +189,7 @@ def is_within_neighbor_countries(geometry, country_boundaries):
     return False
 
 
-def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils):
+def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils, readme_object_key):
     collection = pystac.Collection(
         id="gfm-expanded-collection",
         description="This collection contains Global Flood Monitoring (GFM) flood tile groups contained within a given Sentinel-1 datatake footprint. For each footprint a flowfile created from NWM ANA data is provided that estimates the flows present during the data take. Each tile within a data take footprint is also associated with a flood to baseline ratio that gives the percentage of flooded pixels relative to what is normally inundated according to GFM.",
@@ -216,7 +222,7 @@ def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils
             }
         ),
     )
-    readme_href, is_valid = s3_utils.generate_href(bucket_name, f"{asset_object_key}gfm_data_readme.pdf", link_type)
+    readme_href, is_valid = s3_utils.generate_href(bucket_name, readme_object_key, link_type)
     if is_valid:
         collection.assets["naming_conventions"] = pystac.Asset(
             href=readme_href,
@@ -621,7 +627,7 @@ def _process_one_scene(
 ):
     """Top-level worker for parallel scene processing. Creates own s3_utils and asset_handler."""
     date_path, date_id, sent_ti_path = work_item
-    print(f"Processing scene: {sent_ti_path} of date: {date_id}")
+    logging.info("Processing scene: %s of date: %s", sent_ti_path, date_id)
     if profile is not None:
         os.environ["AWS_PROFILE"] = profile
     else:
@@ -661,9 +667,7 @@ def main_batch_worker(args):
     if not args.partial_parquet_prefix:
         raise ValueError("--partial-parquet-prefix is required in batch-worker mode")
 
-    job_index = args.job_index
-    if job_index is None:
-        job_index = int(os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX", "0"))
+    job_index = args.job_index if args.job_index is not None else 0
 
     if args.profile is not None:
         os.environ["AWS_PROFILE"] = args.profile
@@ -687,7 +691,10 @@ def main_batch_worker(args):
 
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
     catalog_id = "gfm-expanded-collection"
-    collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    collection = create_gfm_exp_collection(
+        args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
+        readme_object_key=args.readme_object_key
+    )
     item_buffer = []
 
     _, hucs_gpkg = os.path.split(args.hucs_object_key)
@@ -739,10 +746,13 @@ def main_batch_worker(args):
             )
             with multiprocessing.Pool(args.workers) as pool:
                 for result in pool.imap_unordered(worker, work_items):
-                    item, sent_ti_path, asset_results = result
-                    if item is not None and asset_results is not None:
-                        item_buffer.append(item)
-                        asset_handler.merge_single_result(sent_ti_path, asset_results)
+                    try:
+                        item, sent_ti_path, asset_results = result
+                        if item is not None and asset_results is not None:
+                            item_buffer.append(item)
+                            asset_handler.merge_single_result(sent_ti_path, asset_results)
+                    except Exception as e:
+                        logging.warning("Worker result failed: %s", e)
 
     flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
 
@@ -765,7 +775,6 @@ def main():
         main_batch_worker(args)
         return
 
-    s3_utils = initialize_s3_utils(profile=args.profile)
     if args.profile is not None:
         os.environ["AWS_PROFILE"] = args.profile
     else:
@@ -777,7 +786,12 @@ def main():
     # Increases the size of the first request to grab headers + metadata in one go
     os.environ["CPL_VSIL_CURL_CHUNK_SIZE"] = "65536"
 
-    collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    s3_utils = initialize_s3_utils(profile=args.profile)
+
+    collection = create_gfm_exp_collection(
+        args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
+        readme_object_key=args.readme_object_key
+    )
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)
     dates = filter_dates_by_scope(
         dates, after_date=args.after_date, before_date=args.before_date, dates_list=args.dates
@@ -826,7 +840,7 @@ def main():
 
         if args.workers <= 1:
             for date in dates:
-                print(f"===============processing {date}===============")
+                logging.info("===============processing %s===============", date)
                 process_date(
                     date,
                     s3_utils,
@@ -872,7 +886,7 @@ def main():
                         work_items_to_process.append((date_path, date_id, sent_ti_path))
                 work_items = work_items_to_process
 
-            print(f"Work items to process: {len(work_items)}")
+            logging.info("Work items to process: %d", len(work_items))
 
             worker = partial(
                 _process_one_scene,
@@ -888,9 +902,12 @@ def main():
             )
             with multiprocessing.Pool(args.workers) as pool:
                 for result in pool.imap_unordered(worker, work_items):
-                    item, sent_ti_path, asset_results = result
-                    if item is not None and asset_results is not None:
-                        on_scene_done(item, sent_ti_path, asset_results)
+                    try:
+                        item, sent_ti_path, asset_results = result
+                        if item is not None and asset_results is not None:
+                            on_scene_done(item, sent_ti_path, asset_results)
+                    except Exception as e:
+                        logging.warning("Worker result failed: %s", e)
 
     # Flush remaining item buffer
     if args.checkpoint_every > 0:
