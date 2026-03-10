@@ -68,6 +68,11 @@ output "boundaries_object_key" {
   value       = var.boundaries_object_key
 }
 
+output "gfm_readme_object_key" {
+  description = "S3 key for the GFM data readme PDF (shared by GFM and GFM_EXP)"
+  value       = var.gfm_readme_object_key
+}
+
 output "gfm_config" {
   description = "GFM pipeline S3 paths"
   value = {

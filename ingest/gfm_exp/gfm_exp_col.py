@@ -148,6 +148,12 @@ def parse_arguments():
         default=None,
         help="S3 prefix where per-job partial parquets are written (required in batch-worker mode).",
     )
+    parser.add_argument(
+        "--readme-object-key",
+        type=str,
+        required=True,
+        help="S3 key for GFM data readme PDF.",
+    )
     return parser.parse_args()
 
 
@@ -183,7 +189,7 @@ def is_within_neighbor_countries(geometry, country_boundaries):
     return False
 
 
-def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils):
+def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils, readme_object_key):
     collection = pystac.Collection(
         id="gfm-expanded-collection",
         description="This collection contains Global Flood Monitoring (GFM) flood tile groups contained within a given Sentinel-1 datatake footprint. For each footprint a flowfile created from NWM ANA data is provided that estimates the flows present during the data take. Each tile within a data take footprint is also associated with a flood to baseline ratio that gives the percentage of flooded pixels relative to what is normally inundated according to GFM.",
@@ -216,7 +222,7 @@ def create_gfm_exp_collection(link_type, bucket_name, asset_object_key, s3_utils
             }
         ),
     )
-    readme_href, is_valid = s3_utils.generate_href(bucket_name, f"{asset_object_key}gfm_data_readme.pdf", link_type)
+    readme_href, is_valid = s3_utils.generate_href(bucket_name, readme_object_key, link_type)
     if is_valid:
         collection.assets["naming_conventions"] = pystac.Asset(
             href=readme_href,
@@ -685,7 +691,10 @@ def main_batch_worker(args):
 
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
     catalog_id = "gfm-expanded-collection"
-    collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    collection = create_gfm_exp_collection(
+        args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
+        readme_object_key=args.readme_object_key
+    )
     item_buffer = []
 
     _, hucs_gpkg = os.path.split(args.hucs_object_key)
@@ -779,7 +788,10 @@ def main():
 
     s3_utils = initialize_s3_utils(profile=args.profile)
 
-    collection = create_gfm_exp_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    collection = create_gfm_exp_collection(
+        args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
+        readme_object_key=args.readme_object_key
+    )
     dates = get_gfm_exp_dates(s3_utils, args.bucket_name, args.asset_object_key)
     dates = filter_dates_by_scope(
         dates, after_date=args.after_date, before_date=args.before_date, dates_list=args.dates

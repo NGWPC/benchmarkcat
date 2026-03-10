@@ -83,6 +83,7 @@ def build_config(args, tf_outputs: dict) -> dict:
     cfg["catalog_path"] = tf_outputs.get("catalog_path")
     cfg["hucs_object_key"] = tf_outputs.get("hucs_object_key")
     cfg["boundaries_object_key"] = tf_outputs.get("boundaries_object_key")
+    cfg["readme_object_key"] = tf_outputs.get("gfm_readme_object_key") or ""
     cfg["job_queue_name"] = tf_outputs.get("job_queue_name")
 
     pipeline = args.pipeline
@@ -345,6 +346,13 @@ async def submit_and_poll_workers(
         "scenes_per_job": str(scenes_per_job),
         "workers": str(cfg["workers"]),
     }
+    readme_key = cfg.get("readme_object_key") or ""
+    worker_params["readme_object_key"] = readme_key
+    if pipeline in ("gfm", "gfm_exp") and not readme_key:
+        raise RuntimeError(
+            "Missing readme_object_key for GFM/GFM_EXP pipeline. "
+            "Set gfm_readme_object_key in terraform.tfvars and run terraform apply."
+        )
     if pipeline == "gfm":
         if not cfg.get("dfo_geopackage_object_key"):
             raise RuntimeError(
@@ -409,6 +417,7 @@ async def submit_and_poll_merge(
         "derived_metadata_path": cfg["derived_metadata_path"],
         "catalog_path": cfg["catalog_path"],
         "asset_object_key": cfg["asset_object_key"],
+        "readme_object_key": cfg["readme_object_key"],
     }
 
     merge_job_name = f"{pipeline}-merge-{timestamp}"

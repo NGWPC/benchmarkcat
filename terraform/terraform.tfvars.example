@@ -41,6 +41,7 @@ scenes_per_job = 50
 catalog_path          = "stac/"
 hucs_object_key       = "benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg"
 boundaries_object_key = "benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg"
+gfm_readme_object_key = "benchmark/stac-bench-cat/assets/gfm_data_readme.pdf"
 
 # GFM paths
 gfm_asset_object_key          = "data-gfm/"

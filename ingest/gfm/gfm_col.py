@@ -141,6 +141,12 @@ def parse_arguments():
         required=True,
         help="S3 key for the DFO USA events GeoPackage.",
     )
+    parser.add_argument(
+        "--readme-object-key",
+        type=str,
+        required=True,
+        help="S3 key for GFM data readme PDF.",
+    )
     return parser.parse_args()
 
 
@@ -233,7 +239,7 @@ def flush_item_batch(s3_utils, bucket_name, catalog_path, catalog_id, collection
     logging.info(f"Flushed batch of items to S3 (prefix {base})")
 
 
-def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
+def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils, readme_object_key):
     collection = pystac.Collection(
         id="gfm-collection",
         description="This collection contains the 50+ Global Flood Monitoring (GFM) flood tile groups identified by using the Dartmouth Flood Observatory (DFO) event data.",
@@ -265,7 +271,7 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
             }
         ),
     )
-    readme_href, is_valid = s3_utils.generate_href(bucket_name, f"{asset_object_key}gfm_data_readme.pdf", link_type)
+    readme_href, is_valid = s3_utils.generate_href(bucket_name, readme_object_key, link_type)
     if is_valid:
         collection.assets["naming_conventions"] = pystac.Asset(
             href=readme_href,
@@ -675,7 +681,10 @@ def main_batch_worker(args):
         dfo_geopackage_object_key=args.dfo_geopackage_object_key,
     )
     catalog_id = "gfm-collection"
-    collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    collection = create_gfm_collection(
+        args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
+        readme_object_key=args.readme_object_key
+    )
     item_buffer = []
 
     _, hucs_gpkg = os.path.split(args.hucs_object_key)
@@ -772,7 +781,10 @@ def main():
 
     s3_utils = initialize_s3_utils(profile=args.profile)
 
-    collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    collection = create_gfm_collection(
+        args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
+        readme_object_key=args.readme_object_key
+    )
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
     asset_handler = GFMAssetHandler(
         s3_utils, args.bucket_name, args.derived_metadata_path,

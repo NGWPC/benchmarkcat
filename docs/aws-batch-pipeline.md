@@ -237,6 +237,7 @@ All path variables are **required** — no defaults. Set them in `terraform/terr
 | `gfm_partial_parquet_prefix`    | GFM partial parquets prefix                                    |
 | `gfm_derived_metadata_path`     | GFM master parquet key                                         |
 | `gfm_dfo_geopackage_object_key` | S3 key for DFO USA events GeoPackage (GFM worker; required)    |
+| `gfm_readme_object_key`         | Full S3 key for GFM data readme PDF (required; shared by GFM and GFM_EXP) |
 | `gfm_exp_`*                     | GFM Expanded equivalents (same pattern)                        |
 
 

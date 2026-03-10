@@ -129,6 +129,7 @@ locals {
         "--scenes-per-job", "Ref::scenes_per_job",
         "--workers", "Ref::workers",
         "--dfo-geopackage-object-key", "Ref::dfo_geopackage_object_key",
+        "--readme-object-key", "Ref::readme_object_key",
       ]
     }
     "gfm-merge" = {
@@ -142,6 +143,7 @@ locals {
         "--derived_metadata_path", "Ref::derived_metadata_path",
         "--catalog_path", "Ref::catalog_path",
         "--asset_object_key", "Ref::asset_object_key",
+        "--readme-object-key", "Ref::readme_object_key",
       ]
     }
     "gfm-exp-split" = {
@@ -172,6 +174,7 @@ locals {
         "--partial-parquet-prefix", "Ref::partial_parquet_prefix",
         "--scenes-per-job", "Ref::scenes_per_job",
         "--workers", "Ref::workers",
+        "--readme-object-key", "Ref::readme_object_key",
       ]
     }
     "gfm-exp-merge" = {
@@ -185,6 +188,7 @@ locals {
         "--derived_metadata_path", "Ref::derived_metadata_path",
         "--catalog_path", "Ref::catalog_path",
         "--asset_object_key", "Ref::asset_object_key",
+        "--readme-object-key", "Ref::readme_object_key",
       ]
     }
   }

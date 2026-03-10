@@ -249,7 +249,7 @@ def run_batch_merge(
 
     Args:
         catalog_id: STAC collection id (e.g. "gfm-collection").
-        collection_creator: Callable(link_type, bucket_name, asset_object_key, s3_utils) -> pystac.Collection.
+        collection_creator: Callable(link_type, bucket_name, asset_object_key, s3_utils, readme_object_key) -> pystac.Collection (for GFM/GFM_EXP).
         description: Short description for argparse help text.
         default_asset_object_key: Default --asset_object_key value.
         default_derived_metadata_path: Default --derived_metadata_path value.
@@ -299,6 +299,12 @@ def run_batch_merge(
         help="Do not delete partial parquets after merging (useful for debugging).",
     )
     parser.add_argument("--profile", type=str, default=None, help="AWS profile name.")
+    parser.add_argument(
+        "--readme-object-key",
+        type=str,
+        required=True,
+        help="S3 key for the GFM data readme PDF.",
+    )
     args = parser.parse_args()
 
     if args.profile is not None:
@@ -338,10 +344,17 @@ def run_batch_merge(
         if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
             logger.warning("No existing collection.json at %s — creating from scratch", collection_key)
             collection = collection_creator(
-                args.link_type, args.bucket_name, args.asset_object_key, s3_utils
+                args.link_type, args.bucket_name, args.asset_object_key, s3_utils, args.readme_object_key
             )
         else:
             raise
+    else:
+        # Update readme asset href to current config so re-runs fix the path
+        readme_href, _ = s3_utils.generate_href(
+            args.bucket_name, args.readme_object_key, args.link_type
+        )
+        if "naming_conventions" in collection.assets:
+            collection.assets["naming_conventions"].href = readme_href
 
     # Remove existing item links so we can re-add from S3 listing
     collection.links = [lk for lk in collection.links if lk.rel != pystac.RelType.ITEM]

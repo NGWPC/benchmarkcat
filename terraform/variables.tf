@@ -201,6 +201,11 @@ variable "boundaries_object_key" {
   type        = string
 }
 
+variable "gfm_readme_object_key" {
+  description = "S3 key for the GFM data readme PDF (naming conventions). Required. Shared by GFM and GFM_EXP."
+  type        = string
+}
+
 # GFM pipeline paths
 variable "gfm_asset_object_key" {
   description = "S3 prefix for GFM source data (DFO event directories)"
