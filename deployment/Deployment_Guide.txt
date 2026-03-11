@@ -99,11 +99,14 @@ Prerequisites:
 - Verify database ready: docker exec benchmarkcat-db pg_isready -U pgstac -d stacdb
 
 Process:
-1. Dry run:
-   python3 load_catalog.py /path/to/catalog --dry-run
+1. Get database password
+   export PGPASSWORD=$(grep POSTGRES_PASSWORD /var/log/benchmarkcat/bootstrap.log | sed 's/.*POSTGRES_PASSWORD=//')
+
+2. Dry run (preview)
+   python3 load_catalog.py /path/to/catalog --db-host localhost --db-password $PGPASSWORD --dry-run
 
 2. Load catalog:
-   python3 load_catalog.py /path/to/catalog
+   python3 load_catalog.py /path/to/catalog --db-host localhost --db-password $PGPASSWORD
 
 3. Verify:
    docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \

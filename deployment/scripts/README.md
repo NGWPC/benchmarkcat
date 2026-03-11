@@ -6,49 +6,6 @@ Utility scripts for managing STAC catalogs and deployment operations.
 
 ## Available Scripts
 
-### reset_database.sh
-Completely resets the pgstac database to load a new STAC catalog.
-
-**When to Use:**
-- Loading a different STAC catalog
-- Database corruption or initialization errors
-- Starting fresh after testing
-
-**Usage:**
-```bash
-# Interactive mode (asks for confirmation)
-./reset_database.sh
-
-# Force mode (no confirmation)
-./reset_database.sh --force
-```
-
-**What it does:**
-1. Stops all BenchmarkCat services
-2. Removes database volume/data (deletes all collections and items)
-3. Restarts services with fresh database
-4. Verifies pgstac initialization
-5. Shows empty database stats
-
-**Important:**
-- This script DELETES ALL DATA in the database
-- Make a backup first if needed
-- After reset, use `load_catalog.py` to load new catalog
-
-**Example Workflow:**
-```bash
-# Reset database
-sudo ./reset_database.sh --force
-
-# Load new catalog
-python3 load_catalog.py /path/to/new-catalog
-
-# Verify
-curl http://localhost:8082/collections
-```
-
----
-
 ### load_catalog.py
 Loads STAC catalog (catalog.json, collections, items) into pgstac database.
 
@@ -287,7 +244,48 @@ curl -I http://${HOST_IP}:8083/s3/test-owp-benchmark-data/data/ble-collection/08
 
 ---
 
+### reset_database.sh
+Completely resets the pgstac database to load a new STAC catalog.
 
+**When to Use:**
+- Loading a different STAC catalog
+- Database corruption or initialization errors
+- Starting fresh after testing
+
+**Usage:**
+```bash
+# Interactive mode (asks for confirmation)
+./reset_database.sh
+
+# Force mode (no confirmation)
+./reset_database.sh --force
+```
+
+**What it does:**
+1. Stops all BenchmarkCat services
+2. Removes database volume/data (deletes all collections and items)
+3. Restarts services with fresh database
+4. Verifies pgstac initialization
+5. Shows empty database stats
+
+**Important:**
+- This script DELETES ALL DATA in the database
+- Make a backup first if needed
+- After reset, use `load_catalog.py` to load new catalog
+
+**Example Workflow:**
+```bash
+# Reset database
+sudo ./reset_database.sh --force
+
+# Load new catalog
+python3 load_catalog.py /path/to/new-catalog
+
+# Verify
+curl http://localhost:8082/collections
+```
+
+---
 
 ## Common Patterns
 
