@@ -228,8 +228,9 @@ async def async_poll_until_complete(
 
 @task(
     name="Phase 1 — Split",
-    retries=2,
-    retry_delay_seconds=60,
+    # disabled retries so the total is 1 attempt with batch job retries
+    # retries=2,
+    # retry_delay_seconds=60,
 )
 async def submit_and_poll_split(
     cfg: dict,
@@ -293,8 +294,9 @@ async def submit_and_poll_split(
 
 @task(
     name="Phase 2 — Workers",
-    retries=1,
-    retry_delay_seconds=120,
+    # disabled retries so the total is 1 attempt with batch job retries
+    # retries=1,
+    # retry_delay_seconds=120,
 )
 async def submit_and_poll_workers(
     cfg: dict,
@@ -397,8 +399,9 @@ async def submit_and_poll_workers(
 
 @task(
     name="Phase 3 — Merge",
-    retries=2,
-    retry_delay_seconds=60,
+    # disabled retries so the total is 1 attempt with batch job retries
+    # retries=2,
+    # retry_delay_seconds=60,
 )
 async def submit_and_poll_merge(
     cfg: dict,
