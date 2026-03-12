@@ -699,8 +699,7 @@ def main_batch_worker(args):
         logging.info("Batch worker %d: merged %d rows from existing partials into results_df",
                      job_index, len(partial_df))
 
-    # Only the delta (newly processed rows) will be uploaded as this job's partial.
-    pre_existing_paths = set(asset_handler.results_df["sent_ti_path"]) if not asset_handler.results_df.empty else set()
+    # Upload full slice for this job so changing scenes_per_job between runs does not lose data when overwriting same job index.
     catalog_id = "gfm-expanded-collection"
     collection = create_gfm_exp_collection(
         args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
@@ -800,16 +799,17 @@ def main_batch_worker(args):
 
     flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
 
-    new_rows_df = asset_handler.results_df[
-        ~asset_handler.results_df["sent_ti_path"].isin(pre_existing_paths)
+    my_sent_ti_paths = {s["sent_ti_path"] for s in my_scenes}
+    upload_df = asset_handler.results_df[
+        asset_handler.results_df["sent_ti_path"].isin(my_sent_ti_paths)
     ]
-    if not new_rows_df.empty:
+    if not upload_df.empty:
         upload_partial_parquet(
             s3_utils,
             args.bucket_name,
             args.partial_parquet_prefix,
             job_index,
-            new_rows_df,
+            upload_df,
         )
 
     logging.info("Batch worker %d done.", job_index)

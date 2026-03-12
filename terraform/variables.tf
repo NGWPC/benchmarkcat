@@ -160,6 +160,12 @@ variable "merge_timeout" {
   default     = 3600 # 1 hr
 }
 
+variable "merge_skip_delete_partials" {
+  description = "If true, merge job keeps partial parquets after merging (for debugging)"
+  type        = bool
+  default     = false
+}
+
 variable "retry_attempts" {
   description = "Number of retry attempts for failed jobs (handles Spot interruptions)"
   type        = number

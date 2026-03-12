@@ -193,6 +193,8 @@ For AWS Batch deployment (Terraform, Docker build/push, and the `run_pipeline_pr
 
 Date filters (`--after-date`, `--before-date`, `--dates`) are applied **only at Phase 1 (batch_split)**. Phase 2 workers process their slice of the manifest as-is and do not re-apply date filters; this avoids double filtering. When Phase 1 uses date filters, a **sidecar metadata file** is written at `<manifest_s3_key>.meta.json` with `total_scenes`, `manifest_s3_key`, `created_at`, and when applicable `after_date`, `before_date`, and/or `dates` so you can see what filters were used when the manifest was built.
 
+**Crash recovery & skip logic:** Phase 2 workers automatically skip scenes that were already fully processed (parquet row exists and item JSON is present on S3). On startup, each worker loads the master parquet *and* any existing partial parquets from previous runs, so scenes completed by sibling workers before a crash are recognized and not reprocessed. Only newly processed scenes are written to this worker's partial parquet.
+
 #### GFM batch
 
 **Phase 1 — Split** (discover DFO events, write manifest to S3; optional `--after-date`, `--before-date`, `--dates` to limit manifest to scenes in that date range by acquisition date):

@@ -258,3 +258,5 @@ aws s3 cp s3://<bucket>/<manifest_s3_key>.meta.json - | python3 -m json.tool
 It contains `total_scenes`, `created_at`, and any active date filters. If `total_scenes = 0`, the split found no matching scenes — check your date filters and S3 prefix.
 
 **Worker OOM (exit code 137)**: Increase `worker_memory` in `terraform.tfvars` and run `terraform apply`. Default is 16 GB; try 32768 for very large scenes.
+
+**Restarting after a crash (before merge)**: Workers automatically detect scenes already processed by loading the master parquet and any existing partial parquets at startup. Each scene is checked against the tracking parquet *and* verified via S3 `HeadObject` on its item JSON — only scenes passing both checks are skipped. Scenes from workers that crashed mid-processing are safely reprocessed. Use `--skip-delete-partials` in the merge phase to preserve partials for post-mortem debugging.
