@@ -194,6 +194,8 @@ python scripts/run_pipeline_prefect.py [options]
 | `--project-name`   | from terraform      | Project name for job definition naming              |
 | `--poll-interval`  | `30`                | Seconds between status polls                        |
 | `--dry-run`        | false               | Print what would be submitted without submitting    |
+| `--skip-split`     | false               | Skip Phase 1; use existing manifest on S3           |
+| `--skip-delete-partials` | false         | Merge: keep partial parquets after merging          |
 
 
 Date filters apply **only to Phase 1 (split)**. They are passed to the split job via container environment (not Batch parameters), so they can be omitted when not needed; the entrypoint converts them to CLI args when set. Workers process their manifest slice as-is; they do not re-apply date filters. A sidecar `<manifest>.meta.json` is written with `total_scenes` and any active filters for auditing.

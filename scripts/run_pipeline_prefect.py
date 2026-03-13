@@ -504,25 +504,39 @@ def run_pipeline_flow(**kwargs) -> dict:
     # -----------------------------------------------------------------
     # Task DAG (Split → Workers → Merge)
     # -----------------------------------------------------------------
-    split_future = submit_and_poll_split.submit(
-        cfg=cfg,
-        pipeline=args.pipeline,
-        timestamp=timestamp,
-        poll_interval=args.poll_interval,
-        dry_run=args.dry_run,
-        after_date=args.after_date,
-        before_date=args.before_date,
-        dates=args.dates,
-    )
+    if args.skip_split:
+        logger.info("Skipping Phase 1 (split) — using existing manifest on S3")
+        split_result = {"phase": "split", "job_id": None, "job_name": "SKIPPED"}
 
-    workers_future = submit_and_poll_workers.submit(
-        cfg=cfg,
-        pipeline=args.pipeline,
-        timestamp=timestamp,
-        poll_interval=args.poll_interval,
-        dry_run=args.dry_run,
-        wait_for=[split_future],
-    )
+        workers_future = submit_and_poll_workers.submit(
+            cfg=cfg,
+            pipeline=args.pipeline,
+            timestamp=timestamp,
+            poll_interval=args.poll_interval,
+            dry_run=args.dry_run,
+        )
+    else:
+        split_future = submit_and_poll_split.submit(
+            cfg=cfg,
+            pipeline=args.pipeline,
+            timestamp=timestamp,
+            poll_interval=args.poll_interval,
+            dry_run=args.dry_run,
+            after_date=args.after_date,
+            before_date=args.before_date,
+            dates=args.dates,
+        )
+
+        workers_future = submit_and_poll_workers.submit(
+            cfg=cfg,
+            pipeline=args.pipeline,
+            timestamp=timestamp,
+            poll_interval=args.poll_interval,
+            dry_run=args.dry_run,
+            wait_for=[split_future],
+        )
+
+        split_result = split_future.result()
 
     merge_future = submit_and_poll_merge.submit(
         cfg=cfg,
@@ -535,7 +549,6 @@ def run_pipeline_flow(**kwargs) -> dict:
     )
 
     # Collect results
-    split_result = split_future.result()
     workers_result = workers_future.result()
     merge_result = merge_future.result()
 
@@ -641,6 +654,12 @@ def parse_args():
         "--skip-delete-partials",
         action="store_true",
         help="Merge job: do not delete partial parquets after merging (for debugging)",
+    )
+    parser.add_argument(
+        "--skip-split",
+        action="store_true",
+        help="Skip Phase 1 (split) and use the existing manifest on S3. "
+             "Useful when retrying with a custom/filtered manifest.",
     )
     return parser.parse_args()
 
