@@ -97,6 +97,51 @@ def upload_partial_parquet(
     return key
 
 
+def load_partial_parquets(
+    s3_utils: Any,
+    bucket_name: str,
+    partial_parquet_prefix: str,
+) -> pd.DataFrame:
+    """Load all existing partial parquets and return as a single deduplicated DataFrame.
+
+    Used by batch workers at startup to recognize scenes already processed by
+    sibling workers in a previous (possibly crashed) run, even when the master
+    parquet does not yet exist.
+    """
+    prefix = partial_parquet_prefix.rstrip("/") + "/"
+    paginator = s3_utils.s3_client.get_paginator("list_objects_v2")
+    partial_keys = []
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".parquet"):
+                partial_keys.append(obj["Key"])
+
+    if not partial_keys:
+        return pd.DataFrame()
+
+    frames = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for key in partial_keys:
+            local = os.path.join(tmpdir, os.path.basename(key))
+            try:
+                s3_utils.s3_client.download_file(bucket_name, key, local)
+                frames.append(pd.read_parquet(local))
+                logger.info("Loaded partial %s (%d rows)", key, len(frames[-1]))
+            except s3_utils.s3_client.exceptions.ClientError as e:
+                if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                    logger.warning("Failed to load partial %s: %s", key, e)
+                else:
+                    raise
+
+    if not frames:
+        return pd.DataFrame()
+
+    merged = pd.concat(frames, ignore_index=True)
+    merged = merged.drop_duplicates(subset=["sent_ti_path"], keep="last").reset_index(drop=True)
+    logger.info("Loaded %d rows from %d existing partial parquet(s)", len(merged), len(partial_keys))
+    return merged
+
+
 def merge_partial_parquets(
     s3_utils: Any,
     bucket_name: str,

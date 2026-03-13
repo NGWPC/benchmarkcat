@@ -136,15 +136,18 @@ locals {
       vcpus   = var.merge_vcpus
       memory  = var.merge_memory
       timeout = var.merge_timeout
-      command = [
-        "ingest.gfm.batch_merge",
-        "--bucket_name", "Ref::bucket_name",
-        "--partial-parquet-prefix", "Ref::partial_parquet_prefix",
-        "--derived_metadata_path", "Ref::derived_metadata_path",
-        "--catalog_path", "Ref::catalog_path",
-        "--asset_object_key", "Ref::asset_object_key",
-        "--readme-object-key", "Ref::readme_object_key",
-      ]
+      command = concat(
+        [
+          "ingest.gfm.batch_merge",
+          "--bucket_name", "Ref::bucket_name",
+          "--partial-parquet-prefix", "Ref::partial_parquet_prefix",
+          "--derived_metadata_path", "Ref::derived_metadata_path",
+          "--catalog_path", "Ref::catalog_path",
+          "--asset_object_key", "Ref::asset_object_key",
+          "--readme-object-key", "Ref::readme_object_key",
+        ],
+        var.merge_skip_delete_partials ? ["--skip-delete-partials"] : []
+      )
     }
     "gfm-exp-split" = {
       vcpus   = var.split_vcpus
@@ -181,15 +184,18 @@ locals {
       vcpus   = var.merge_vcpus
       memory  = var.merge_memory
       timeout = var.merge_timeout
-      command = [
-        "ingest.gfm_exp.batch_merge",
-        "--bucket_name", "Ref::bucket_name",
-        "--partial-parquet-prefix", "Ref::partial_parquet_prefix",
-        "--derived_metadata_path", "Ref::derived_metadata_path",
-        "--catalog_path", "Ref::catalog_path",
-        "--asset_object_key", "Ref::asset_object_key",
-        "--readme-object-key", "Ref::readme_object_key",
-      ]
+      command = concat(
+        [
+          "ingest.gfm_exp.batch_merge",
+          "--bucket_name", "Ref::bucket_name",
+          "--partial-parquet-prefix", "Ref::partial_parquet_prefix",
+          "--derived_metadata_path", "Ref::derived_metadata_path",
+          "--catalog_path", "Ref::catalog_path",
+          "--asset_object_key", "Ref::asset_object_key",
+          "--readme-object-key", "Ref::readme_object_key",
+        ],
+        var.merge_skip_delete_partials ? ["--skip-delete-partials"] : []
+      )
     }
   }
 }

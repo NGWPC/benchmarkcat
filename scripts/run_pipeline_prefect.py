@@ -228,8 +228,9 @@ async def async_poll_until_complete(
 
 @task(
     name="Phase 1 — Split",
-    retries=2,
-    retry_delay_seconds=60,
+    # disabled retries so the total is 1 attempt with batch job retries
+    # retries=2,
+    # retry_delay_seconds=60,
 )
 async def submit_and_poll_split(
     cfg: dict,
@@ -293,8 +294,9 @@ async def submit_and_poll_split(
 
 @task(
     name="Phase 2 — Workers",
-    retries=1,
-    retry_delay_seconds=120,
+    # disabled retries so the total is 1 attempt with batch job retries
+    # retries=1,
+    # retry_delay_seconds=120,
 )
 async def submit_and_poll_workers(
     cfg: dict,
@@ -397,8 +399,9 @@ async def submit_and_poll_workers(
 
 @task(
     name="Phase 3 — Merge",
-    retries=2,
-    retry_delay_seconds=60,
+    # disabled retries so the total is 1 attempt with batch job retries
+    # retries=2,
+    # retry_delay_seconds=60,
 )
 async def submit_and_poll_merge(
     cfg: dict,
@@ -406,6 +409,7 @@ async def submit_and_poll_merge(
     timestamp: str,
     poll_interval: int = 30,
     dry_run: bool = False,
+    skip_delete_partials: bool = False,
 ) -> dict:
     """Submit Merge job to Batch and poll until complete."""
     logger = get_run_logger()
@@ -420,6 +424,12 @@ async def submit_and_poll_merge(
         "readme_object_key": cfg["readme_object_key"],
     }
 
+    merge_overrides = (
+        {"environment": [{"name": "SKIP_DELETE_PARTIALS", "value": "1"}]}
+        if skip_delete_partials
+        else None
+    )
+
     merge_job_name = f"{pipeline}-merge-{timestamp}"
     merge_job_id = submit_job(
         batch_client,
@@ -427,6 +437,7 @@ async def submit_and_poll_merge(
         job_definition=cfg["merge_job_def"],
         job_queue=cfg["job_queue_name"],
         parameters=merge_params,
+        container_overrides=merge_overrides,
         dry_run=dry_run,
     )
 
@@ -493,25 +504,39 @@ def run_pipeline_flow(**kwargs) -> dict:
     # -----------------------------------------------------------------
     # Task DAG (Split → Workers → Merge)
     # -----------------------------------------------------------------
-    split_future = submit_and_poll_split.submit(
-        cfg=cfg,
-        pipeline=args.pipeline,
-        timestamp=timestamp,
-        poll_interval=args.poll_interval,
-        dry_run=args.dry_run,
-        after_date=args.after_date,
-        before_date=args.before_date,
-        dates=args.dates,
-    )
+    if args.skip_split:
+        logger.info("Skipping Phase 1 (split) — using existing manifest on S3")
+        split_result = {"phase": "split", "job_id": None, "job_name": "SKIPPED"}
 
-    workers_future = submit_and_poll_workers.submit(
-        cfg=cfg,
-        pipeline=args.pipeline,
-        timestamp=timestamp,
-        poll_interval=args.poll_interval,
-        dry_run=args.dry_run,
-        wait_for=[split_future],
-    )
+        workers_future = submit_and_poll_workers.submit(
+            cfg=cfg,
+            pipeline=args.pipeline,
+            timestamp=timestamp,
+            poll_interval=args.poll_interval,
+            dry_run=args.dry_run,
+        )
+    else:
+        split_future = submit_and_poll_split.submit(
+            cfg=cfg,
+            pipeline=args.pipeline,
+            timestamp=timestamp,
+            poll_interval=args.poll_interval,
+            dry_run=args.dry_run,
+            after_date=args.after_date,
+            before_date=args.before_date,
+            dates=args.dates,
+        )
+
+        workers_future = submit_and_poll_workers.submit(
+            cfg=cfg,
+            pipeline=args.pipeline,
+            timestamp=timestamp,
+            poll_interval=args.poll_interval,
+            dry_run=args.dry_run,
+            wait_for=[split_future],
+        )
+
+        split_result = split_future.result()
 
     merge_future = submit_and_poll_merge.submit(
         cfg=cfg,
@@ -519,11 +544,11 @@ def run_pipeline_flow(**kwargs) -> dict:
         timestamp=timestamp,
         poll_interval=args.poll_interval,
         dry_run=args.dry_run,
+        skip_delete_partials=args.skip_delete_partials,
         wait_for=[workers_future],
     )
 
     # Collect results
-    split_result = split_future.result()
     workers_result = workers_future.result()
     merge_result = merge_future.result()
 
@@ -624,6 +649,17 @@ def parse_args():
         type=int,
         default=30,
         help="Seconds between status polls (default: 30)",
+    )
+    parser.add_argument(
+        "--skip-delete-partials",
+        action="store_true",
+        help="Merge job: do not delete partial parquets after merging (for debugging)",
+    )
+    parser.add_argument(
+        "--skip-split",
+        action="store_true",
+        help="Skip Phase 1 (split) and use the existing manifest on S3. "
+             "Useful when retrying with a custom/filtered manifest.",
     )
     return parser.parse_args()
 
