@@ -146,7 +146,7 @@ locals {
           "--asset_object_key", "Ref::asset_object_key",
           "--readme-object-key", "Ref::readme_object_key",
         ],
-        var.merge_skip_delete_partials ? ["--skip-delete-partials"] : []
+        var.merge_keep_partials ? ["--keep-partials"] : []
       )
     }
     "gfm-exp-split" = {
@@ -194,7 +194,7 @@ locals {
           "--asset_object_key", "Ref::asset_object_key",
           "--readme-object-key", "Ref::readme_object_key",
         ],
-        var.merge_skip_delete_partials ? ["--skip-delete-partials"] : []
+        var.merge_keep_partials ? ["--keep-partials"] : []
       )
     }
   }

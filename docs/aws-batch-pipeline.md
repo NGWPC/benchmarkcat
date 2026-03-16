@@ -195,7 +195,7 @@ python scripts/run_pipeline_prefect.py [options]
 | `--poll-interval`  | `30`                | Seconds between status polls                        |
 | `--dry-run`        | false               | Print what would be submitted without submitting    |
 | `--skip-split`     | false               | Skip Phase 1; use existing manifest on S3           |
-| `--skip-delete-partials` | false         | Merge: keep partial parquets after merging          |
+| `--keep-partials` | false         | Merge: keep partial parquets after merging          |
 
 
 Date filters apply **only to Phase 1 (split)**. They are passed to the split job via container environment (not Batch parameters), so they can be omitted when not needed; the entrypoint converts them to CLI args when set. Workers process their manifest slice as-is; they do not re-apply date filters. A sidecar `<manifest>.meta.json` is written with `total_scenes` and any active filters for auditing.
@@ -261,4 +261,4 @@ It contains `total_scenes`, `created_at`, and any active date filters. If `total
 
 **Worker OOM (exit code 137)**: Increase `worker_memory` in `terraform.tfvars` and run `terraform apply`. Default is 16 GB; try 32768 for very large scenes.
 
-**Restarting after a crash (before merge)**: Workers automatically detect scenes already processed by loading the master parquet and any existing partial parquets at startup. Each scene is checked against the tracking parquet *and* verified via S3 `HeadObject` on its item JSON — only scenes passing both checks are skipped. Scenes from workers that crashed mid-processing are safely reprocessed. Use `--skip-delete-partials` in the merge phase to preserve partials for post-mortem debugging.
+**Restarting after a crash (before merge)**: Workers automatically detect scenes already processed by loading the master parquet and any existing partial parquets at startup. Each scene is checked against the tracking parquet *and* verified via S3 `HeadObject` on its item JSON — only scenes passing both checks are skipped. Scenes from workers that crashed mid-processing are safely reprocessed. Use `--keep-partials` in the merge phase to preserve partials for post-mortem debugging.

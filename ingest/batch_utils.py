@@ -339,9 +339,9 @@ def run_batch_merge(
         help='Link type for collection href generation ("uri" or "url").',
     )
     parser.add_argument(
-        "--skip-delete-partials",
+        "--keep-partials",
         action="store_true",
-        help="Do not delete partial parquets after merging (useful for debugging).",
+        help="Keep partial parquets after merging (useful for debugging).",
     )
     parser.add_argument("--profile", type=str, default=None, help="AWS profile name.")
     parser.add_argument(
@@ -416,7 +416,7 @@ def run_batch_merge(
     logger.info("Collection.json updated.")
 
     # 3. Delete partial parquets
-    if not args.skip_delete_partials:
+    if not args.keep_partials:
         logger.info("Deleting partial parquets...")
         delete_partial_parquets(s3_utils, args.bucket_name, args.partial_parquet_prefix)
 

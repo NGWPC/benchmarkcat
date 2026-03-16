@@ -409,7 +409,7 @@ async def submit_and_poll_merge(
     timestamp: str,
     poll_interval: int = 30,
     dry_run: bool = False,
-    skip_delete_partials: bool = False,
+    keep_partials: bool = False,
 ) -> dict:
     """Submit Merge job to Batch and poll until complete."""
     logger = get_run_logger()
@@ -425,8 +425,8 @@ async def submit_and_poll_merge(
     }
 
     merge_overrides = (
-        {"environment": [{"name": "SKIP_DELETE_PARTIALS", "value": "1"}]}
-        if skip_delete_partials
+        {"environment": [{"name": "KEEP_PARTIALS", "value": "1"}]}
+        if keep_partials
         else None
     )
 
@@ -544,7 +544,7 @@ def run_pipeline_flow(**kwargs) -> dict:
         timestamp=timestamp,
         poll_interval=args.poll_interval,
         dry_run=args.dry_run,
-        skip_delete_partials=args.skip_delete_partials,
+        keep_partials=args.keep_partials,
         wait_for=[workers_future],
     )
 
@@ -651,9 +651,9 @@ def parse_args():
         help="Seconds between status polls (default: 30)",
     )
     parser.add_argument(
-        "--skip-delete-partials",
+        "--keep-partials",
         action="store_true",
-        help="Merge job: do not delete partial parquets after merging (for debugging)",
+        help="Merge job: keep partial parquets after merging (for debugging)",
     )
     parser.add_argument(
         "--skip-split",

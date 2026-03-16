@@ -160,7 +160,7 @@ variable "merge_timeout" {
   default     = 3600 # 1 hr
 }
 
-variable "merge_skip_delete_partials" {
+variable "merge_keep_partials" {
   description = "If true, merge job keeps partial parquets after merging (for debugging)"
   type        = bool
   default     = false

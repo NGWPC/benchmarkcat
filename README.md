@@ -271,10 +271,10 @@ python3 -m ingest.gfm.batch_merge \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/gfm/ \
   --profile Data \
-  --skip-delete-partials
+  --keep-partials
 ```
 
-Add `--skip-delete-partials` to keep partial parquets for debugging.
+Add `--keep-partials` to preserve partial parquets for debugging.
 
 With Docker:
 
@@ -289,7 +289,7 @@ docker run --rm \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials \
+  --keep-partials \
   2>&1 | tee logs/gfm_col_run_merge.log
 ```
 
@@ -372,10 +372,10 @@ python3 -m ingest.gfm_exp.batch_merge \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials
+  --keep-partials
 ```
 
-Add `--skip-delete-partials` for debugging.
+Add `--keep-partials` to preserve partial parquets for debugging.
 
 With Docker:
 
@@ -390,7 +390,7 @@ docker run --rm \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials \
+  --keep-partials \
   2>&1 | tee logs/gfm_exp_col_run_merge.log
 ```
 
