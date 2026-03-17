@@ -185,6 +185,18 @@ docker run --rm \
 ```
 
 
+### Orchestration Container
+
+A separate lightweight container for running the Prefect pipeline orchestrator and Terraform. It does **not** include GDAL or geospatial libraries.
+
+```bash
+docker build -f Dockerfile.orchestration -t benchmarkcat:orchestration .
+docker run --rm \
+  -v "$HOME/.aws:/root/.aws" \
+  benchmarkcat:orchestration \
+  python3 scripts/run_pipeline_prefect.py --help
+```
+
 ### Batch pipeline (GFM and GFM Expanded)
 
 GFM and GFM expanded support a 3-phase batch workflow for scaling to many scenes. For local testing, run Phase 1, then Phase 2 (e.g. with `--job-index 0`), then Phase 3. All examples below use placeholder S3 paths under `benchmark/stac-bench-cat/` and `benchmark/rs/`; replace with your bucket and paths as needed.
