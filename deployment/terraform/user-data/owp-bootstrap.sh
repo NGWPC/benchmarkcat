@@ -6,15 +6,6 @@
 # Instance Type: t3.xlarge (4 vCPU, 16 GB RAM)
 # OS: Ubuntu 22.04 or Ubuntu 24.04
 #
-# Usage as AWS Console User Data:
-#   1. Copy entire contents of this file
-#   2. Paste into "User data" field during EC2 instance launch
-#   3. Launch instance - script runs automatically on first boot
-#
-# Usage as manual script:
-#   1. SSH to instance
-#   2. Copy this file to instance
-#   3. Run: sudo bash owp-bootstrap-standalone.sh
 #
 ################################################################################
 
@@ -25,11 +16,10 @@ INSTALL_DIR="/opt/benchmarkcat"
 LOG_DIR="/var/log/benchmarkcat"
 BACKUP_DIR="/opt/backups/postgres"
 
-# AWS Configuration - UPDATE THESE
+# AWS Configuration
 AWS_REGION="us-east-1"
-S3_BUCKET="owp-benchmark"  # Change to your OWP S3 bucket name
-S3_CATALOG_PATH="stac/"              # Change based on your S3 structure
-S3_PREFIX= 
+BACKUP_S3_URI=""
+DOMAIN_NAME="localhost"
 
 # Database Configuration
 POSTGRES_USER="pgstac"
@@ -73,16 +63,43 @@ echo "[$(date)] Bootstrap started"
 ################################################################################
 echo "[$(date)] Updating system packages..."
 
+# Ubuntu has a known issues with apt locks when cloud-init is running updates in the background.
+wait_for_apt_lock() {
+  echo "[$(date)] Checking for APT locks..."
+  for i in {1..30}; do
+    # Check all three locks. If NONE of them are held, we are good to go.
+    if ! sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 && \
+       ! sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 && \
+       ! sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+      echo "[$(date)] APT locks are clear."
+      return 0
+    fi
+    echo "Waiting for APT locks to release... ($i/30)"
+    sleep 5
+  done
+  echo "[$(date)] ERROR: APT lock timeout after 150 seconds."
+  exit 1
+}
+
 # Ensure IPv4-only apt (fixes Docker + mirror issues)
 echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 
+# Wait for system updates to finish (handles cloud-init or other package managers)
+while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
+
 # Clean apt state completely
+wait_for_apt_lock
 sudo apt-get clean
 sudo rm -rf /var/lib/apt/lists/*
 
 # Ubuntu package installation
+wait_for_apt_lock
 sudo apt-get update -y
+
+wait_for_apt_lock
 sudo apt-get upgrade -y
+
+wait_for_apt_lock
 sudo apt-get install -y \
     docker.io \
     git \
@@ -93,17 +110,25 @@ sudo apt-get install -y \
     jq \
     postgresql-client \
     python3 \
-    python3-pip
+    python3-pip \
+    unzip
 
-curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip
-sudo apt-get install -y unzip
-unzip -o awscliv2.zip
+ARCH=$(uname -m)
+[ "$ARCH" = "x86_64" ] && URL="x86_64" || URL="aarch64"
+
+curl -s "https://awscli.amazonaws.com/awscli-exe-linux-$URL.zip" -o "awscliv2.zip"
+unzip -q awscliv2.zip
 sudo ./aws/install --update
 aws --version
 
 # Install Python dependencies for catalog loading scripts
 echo "[$(date)] Installing Python dependencies..."
-pip3 install --no-cache-dir --break-system-packages psycopg2-binary
+PIP_EXTRA_ARGS=""
+OS_MAJOR=$(echo "$OS_VERSION" | cut -d. -f1)
+if [ "$OS_MAJOR" -ge 23 ] 2>/dev/null; then
+    PIP_EXTRA_ARGS="--break-system-packages"
+fi
+pip3 install --no-cache-dir $PIP_EXTRA_ARGS psycopg2-binary
 
 echo "[$(date)] System packages installed"
 
@@ -180,6 +205,8 @@ fi
 ################################################################################
 echo "[$(date)] Creating environment configuration..."
 
+PRIMARY_S3_BUCKET=""
+
 cat > $INSTALL_DIR/deployment/.env <<EOF
 ################################################################################
 # BenchmarkCat STAC - OWP Environment Configuration
@@ -194,20 +221,22 @@ POSTGRES_HOST=database
 POSTGRES_PORT=5432
 
 # STAC API Configuration
+
+STAC_API_URL="http://$DOMAIN_NAME:8082"
 STAC_API_TITLE=OWP BenchmarkCat STAC API
 STAC_API_DESCRIPTION=Benchmark evaluation data catalog for NOAA OWP
 API_PORT=8082
 BROWSER_PORT=8080
+S3_BUCKET=$PRIMARY_S3_BUCKET
+S3_CATALOG_PATH="stac/"
 # Docker Image Versions
 PGSTAC_VERSION="v0.8.6"
 STAC_API_VERSION="latest"
 STAC_BROWSER_VERSION="latest"
-
+SB_maxPreviewsOnMap=-1
 
 # AWS Configuration
 AWS_REGION=$AWS_REGION
-AWS_S3_BUCKET=$S3_BUCKET
-AWS_REQUEST_PAYER=requester
 
 # GDAL VSI Configuration
 VSI_CACHE=TRUE
@@ -227,6 +256,235 @@ DB_MAX_CONN_SIZE=50
 # Logging
 LOG_LEVEL=INFO
 EOF
+
+################################################################################
+# Create Asset Proxy Service Files
+################################################################################
+echo "[$(date)] Creating asset proxy service..."
+
+mkdir -p $INSTALL_DIR/deployment/asset-proxy
+
+cat > $INSTALL_DIR/deployment/asset-proxy/app.py <<'PROXY_APP_EOF'
+#!/usr/bin/env python3
+"""
+S3 Asset Proxy Service for STAC
+Streams S3 assets directly using IAM role credentials
+"""
+import os
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
+import boto3
+from botocore.exceptions import ClientError
+import uvicorn
+
+app = FastAPI(title="STAC Asset Proxy")
+
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_methods=['GET', 'HEAD'],
+    allow_headers=['*'],
+)
+
+# S3 client with IAM role credentials
+s3_client = boto3.client('s3', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+
+
+@app.get('/health')
+@app.head('/health')
+def health_check():
+    """Health check endpoint"""
+    return {'status': 'ok', 'service': 'asset-proxy'}
+
+
+@app.head('/s3/{bucket}/{path:path}')
+def head_s3_asset(bucket: str, path: str):
+    """
+    HEAD request for S3 asset metadata.
+
+    Args:
+        bucket: S3 bucket name
+        path: Object key path
+
+    Returns:
+        Response with S3 object metadata headers
+    """
+    try:
+        response = s3_client.head_object(
+            Bucket=bucket,
+            Key=path
+        )
+
+        headers = {
+            'Content-Type': response.get('ContentType', 'application/octet-stream'),
+            'Content-Length': str(response.get('ContentLength', 0)),
+            'Last-Modified': response.get('LastModified', '').strftime('%a, %d %b %Y %H:%M:%S GMT') if response.get('LastModified') else '',
+            'ETag': response.get('ETag', ''),
+            'Accept-Ranges': 'bytes',
+        }
+
+        return Response(headers=headers, status_code=200)
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == '404':
+            raise HTTPException(status_code=404, detail=f"Object not found: {bucket}/{path}")
+        else:
+            raise HTTPException(status_code=403, detail=f"Access denied: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get('/s3/{bucket}/{path:path}')
+def proxy_s3_asset(bucket: str, path: str, request: Request):
+    """
+    Stream S3 asset content directly using IAM role credentials.
+
+    Supports HTTP Range requests for COG/GeoTIFF rendering in browsers.
+
+    Args:
+        bucket: S3 bucket name
+        path: Object key path
+        request: FastAPI request object
+
+    Returns:
+        StreamingResponse with S3 object content (full or partial)
+    """
+    try:
+        # First get object metadata to know the total size
+        head_response = s3_client.head_object(
+            Bucket=bucket,
+            Key=path
+        )
+        total_size = head_response['ContentLength']
+
+        # Parse Range header if present
+        range_header = request.headers.get('range')
+
+        if range_header and range_header.startswith('bytes='):
+            # Parse range (e.g., "bytes=0-1023")
+            range_spec = range_header.replace('bytes=', '')
+            range_parts = range_spec.split('-')
+
+            start = int(range_parts[0]) if range_parts[0] else 0
+            end = int(range_parts[1]) if len(range_parts) > 1 and range_parts[1] else total_size - 1
+
+            # Ensure end doesn't exceed file size
+            end = min(end, total_size - 1)
+            content_length = end - start + 1
+
+            # Get object with range
+            response = s3_client.get_object(
+                Bucket=bucket,
+                Key=path,
+                Range=f'bytes={start}-{end}'
+            )
+
+            # Stream the partial content
+            def generate():
+                for chunk in response['Body'].iter_chunks(chunk_size=65536):
+                    yield chunk
+
+            headers = {
+                'Content-Type': head_response.get('ContentType', 'application/octet-stream'),
+                'Content-Length': str(content_length),
+                'Content-Range': f'bytes {start}-{end}/{total_size}',
+                'Accept-Ranges': 'bytes',
+                'Last-Modified': head_response.get('LastModified', '').strftime('%a, %d %b %Y %H:%M:%S GMT') if head_response.get('LastModified') else '',
+                'ETag': head_response.get('ETag', ''),
+                'Cache-Control': 'public, max-age=3600',
+            }
+
+            return StreamingResponse(
+                generate(),
+                status_code=206,  # Partial Content
+                media_type=head_response.get('ContentType', 'application/octet-stream'),
+                headers=headers
+            )
+
+        else:
+            # No range request - return full content
+            response = s3_client.get_object(
+                Bucket=bucket,
+                Key=path
+            )
+
+            def generate():
+                for chunk in response['Body'].iter_chunks(chunk_size=65536):
+                    yield chunk
+
+            headers = {
+                'Content-Type': response.get('ContentType', 'application/octet-stream'),
+                'Content-Length': str(response.get('ContentLength', 0)),
+                'Accept-Ranges': 'bytes',
+                'Last-Modified': response.get('LastModified', '').strftime('%a, %d %b %Y %H:%M:%S GMT') if response.get('LastModified') else '',
+                'ETag': response.get('ETag', ''),
+                'Cache-Control': 'public, max-age=3600',
+            }
+
+            return StreamingResponse(
+                generate(),
+                media_type=response.get('ContentType', 'application/octet-stream'),
+                headers=headers
+            )
+
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == 'NoSuchKey':
+            raise HTTPException(status_code=404, detail=f"Object not found: {bucket}/{path}")
+        elif error_code in ['AccessDenied', '403']:
+            raise HTTPException(status_code=403, detail=f"Access denied to {bucket}/{path}")
+        else:
+            raise HTTPException(status_code=500, detail=f"S3 error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get('PORT', '8083')),
+        log_level=os.environ.get('LOG_LEVEL', 'info').lower()
+    )
+PROXY_APP_EOF
+
+cat > $INSTALL_DIR/deployment/asset-proxy/requirements.txt <<'PROXY_REQ_EOF'
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+boto3==1.34.0
+PROXY_REQ_EOF
+
+cat > $INSTALL_DIR/deployment/asset-proxy/Dockerfile <<'PROXY_DOCKER_EOF'
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY app.py .
+
+# Run as non-root user for security
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Expose port
+EXPOSE 8083
+
+# Run application
+CMD ["python", "app.py"]
+PROXY_DOCKER_EOF
+
+if [ "$RUNTIME_USER" != "root" ]; then
+    sudo chown -R $RUNTIME_USER:$RUNTIME_USER $INSTALL_DIR/deployment/asset-proxy 2>/dev/null || true
+fi
+
+echo "[$(date)] Asset proxy service files created"
 
 ################################################################################
 # Create Docker Compose File
@@ -287,7 +545,6 @@ services:
       - DB_MIN_CONN_SIZE=${DB_MIN_CONN_SIZE}
       - DB_MAX_CONN_SIZE=${DB_MAX_CONN_SIZE}
       - AWS_REGION=${AWS_REGION}
-      - AWS_REQUEST_PAYER=${AWS_REQUEST_PAYER}
       - VSI_CACHE=${VSI_CACHE}
       - VSI_CACHE_SIZE=${VSI_CACHE_SIZE}
       - GDAL_CACHEMAX=${GDAL_CACHEMAX}
@@ -295,6 +552,8 @@ services:
       - CPL_VSIL_CURL_ALLOWED_EXTENSIONS=${CPL_VSIL_CURL_ALLOWED_EXTENSIONS}
       - GDAL_DISABLE_READDIR_ON_OPEN=${GDAL_DISABLE_READDIR_ON_OPEN}
       - CPL_VSIL_CURL_USE_HEAD=${CPL_VSIL_CURL_USE_HEAD}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_CATALOG_PATH=${S3_CATALOG_PATH}
     ports:
       - "8082:8082"
     depends_on:
@@ -307,12 +566,25 @@ services:
     container_name: benchmarkcat-browser
     image: ghcr.io/radiantearth/stac-browser:${STAC_BROWSER_VERSION}
     environment:
-      - SB_catalogUrl=http://0.0.0.0:8082
-      - SB_maxPreviewsOnMap=0
+      - SB_catalogUrl=${STAC_API_URL}
+      - SB_maxPreviewsOnMap=-1
     ports:
       - "8080:8080"
     depends_on:
       - stac-api
+    restart: unless-stopped
+
+  asset-proxy:
+    container_name: benchmarkcat-asset-proxy
+    build:
+      context: ./asset-proxy
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      - AWS_REGION=${AWS_REGION}
+      - PRESIGNED_URL_EXPIRATION=3600
+      - PORT=8083
+      - LOG_LEVEL=info
     restart: unless-stopped
 COMPOSE_EOF
 
@@ -343,11 +615,21 @@ fi
 ################################################################################
 echo "[$(date)] Creating health check script..."
 
-cat > $INSTALL_DIR/deployment/health-check.sh <<'HEALTH_EOF'
+cat > $INSTALL_DIR/deployment/health-check.sh <<HEALTH_EOF
 #!/bin/bash
 
+# In test mode (Docker-in-Docker), services are sibling containers reachable
+# by container name on the shared network, not via localhost.
+if [ "${BOOTSTRAP_TEST_MODE:-false}" = "true" ]; then
+    API_HOST="benchmarkcat-api"
+    BROWSER_HOST="benchmarkcat-browser"
+else
+    API_HOST="localhost"
+    BROWSER_HOST="localhost"
+fi
+
 echo "=== BenchmarkCat STAC Health Check ==="
-echo "Date: $(date)"
+echo "Date: \$(date)"
 echo ""
 
 # Check Docker containers
@@ -357,9 +639,9 @@ echo ""
 
 # Check API endpoint
 echo "--- STAC API Health ---"
-API_RESPONSE=$(curl -s http://localhost:8082/ 2>/dev/null)
-if [ $? -eq 0 ]; then
-    echo "$API_RESPONSE" | jq -r '.title // "API Running (no title)"' 2>/dev/null || echo "API: Running"
+API_RESPONSE=\$(curl -s http://\${API_HOST}:8082/ 2>/dev/null)
+if [ \$? -eq 0 ]; then
+    echo "\$API_RESPONSE" | jq -r '.title // "API Running (no title)"' 2>/dev/null || echo "API: Running"
 else
     echo "API: NOT RESPONDING"
 fi
@@ -367,7 +649,7 @@ echo ""
 
 # Check Browser endpoint
 echo "--- STAC Browser Health ---"
-curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:8080 2>/dev/null || echo "Browser: NOT RESPONDING"
+curl -s -o /dev/null -w "HTTP %{http_code}\n" http://\${BROWSER_HOST}:8080 2>/dev/null || echo "Browser: NOT RESPONDING"
 echo ""
 
 # Check database
@@ -394,7 +676,12 @@ echo ""
 echo "--- S3 Access Test ---"
 if aws sts get-caller-identity &>/dev/null; then
     echo "AWS Credentials: OK"
-    aws s3 ls s3://owp-benchmark/ --max-items 1 &>/dev/null && echo "S3 Access: OK" || echo "S3 Access: FAILED"
+    TEST_BUCKET=""
+    if [ -n "\$TEST_BUCKET" ]; then
+        aws s3 ls s3://\$TEST_BUCKET/ &>/dev/null && echo "S3 Access: OK" || echo "S3 Access: FAILED"
+    else
+        echo "S3 Access: SKIPPED (No read buckets defined)"
+    fi
 else
     echo "AWS Credentials: NOT CONFIGURED"
 fi
@@ -417,8 +704,7 @@ set -e
 BACKUP_DIR=/opt/backups/postgres
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="stacdb_${TIMESTAMP}.sql.gz"
-S3_BUCKET=$S3_BUCKET #S3_BUCKET="owp-benchmark"
-S3_PREFIX="backups/stac-db"
+DESTINATION_URI=""
 
 mkdir -p $BACKUP_DIR
 
@@ -428,18 +714,19 @@ echo "[$(date)] Starting database backup..."
 docker exec benchmarkcat-db pg_dump -U pgstac -d stacdb | gzip > "$BACKUP_DIR/$BACKUP_FILE"
 
 if [ -s "$BACKUP_DIR/$BACKUP_FILE" ]; then
-    echo "[$(date)] Backup created: $BACKUP_FILE ($(du -h $BACKUP_DIR/$BACKUP_FILE | cut -f1))"
+    echo "[$(date)] Backup created: $BACKUP_FILE"
 
-    # Upload to S3 (requires IAM role with S3 write permissions)
-    if aws s3 cp "$BACKUP_DIR/$BACKUP_FILE" "s3://$S3_BUCKET/$S3_PREFIX/$BACKUP_FILE" 2>/dev/null; then
-        echo "[$(date)] Backup uploaded to S3: s3://$S3_BUCKET/$S3_PREFIX/$BACKUP_FILE"
+    # Upload to S3 if a destination URI is provided
+    if [ -n "$DESTINATION_URI" ]; then
+        [[ "$DESTINATION_URI" != */ ]] && DESTINATION_URI="${DESTINATION_URI}/"
+        aws s3 cp "$BACKUP_DIR/$BACKUP_FILE" "${DESTINATION_URI}$BACKUP_FILE" 2>/dev/null
+        echo "[$(date)] Backup uploaded to S3: ${DESTINATION_URI}$BACKUP_FILE"
     else
-        echo "[$(date)] Warning: Could not upload to S3 (check IAM permissions)"
+        echo "[$(date)] S3 Upload skipped: No backup URI configured."
     fi
 
     # Cleanup old local backups (keep last 7 days)
     find $BACKUP_DIR -name "stacdb_*.sql.gz" -mtime +7 -delete
-    echo "[$(date)] Old backups cleaned up (kept last 7 days)"
 else
     echo "[$(date)] ERROR: Backup file is empty"
     exit 1
@@ -675,8 +962,6 @@ $INSTALL_DIR/deployment/health-check.sh
 ################################################################################
 # Print Summary
 ################################################################################
-INSTANCE_IP=$(ec2-metadata --public-ipv4 2>/dev/null | cut -d " " -f 2 || echo "<instance-ip>")
-
 cat <<SUMMARY
 
 ================================================================================
@@ -687,35 +972,40 @@ Installation Directory: $INSTALL_DIR
 Logs Directory:         $LOG_DIR
 Backup Directory:       $BACKUP_DIR
 
+Deployment Configuration:
+  AWS Region:       $AWS_REGION
+  S3 Backup URI:    ${BACKUP_S3_URI:-"None configured (Local backups only)"}
+  API Version:      $STAC_API_VERSION
+  Browser Version:  $STAC_BROWSER_VERSION
+
 Services (verify with health-check.sh):
-  STAC API:     http://$INSTANCE_IP:8082
-  STAC Browser: http://$INSTANCE_IP:8080
+  STAC API:     http://$DOMAIN_NAME:8082
+  STAC Browser: http://$DOMAIN_NAME:8080
   Database:     localhost:5432 (internal)
 
 Database Credentials:
   User:     $POSTGRES_USER
-  Password: (stored in $INSTALL_DIR/.db_password)
+  Password: (stored securely in $INSTALL_DIR/.db_password)
   Database: $POSTGRES_DB
 
 Quick Start:
   Health Check:  $INSTALL_DIR/deployment/health-check.sh
   View Logs:     $INSTALL_DIR/deployment/view-logs.sh
-  Test API:      curl http://localhost:8082/
+  Test API:      curl http://$DOMAIN_NAME:8082/
 
 Next Steps:
   1. Run health check: $INSTALL_DIR/deployment/health-check.sh
-  2. Test API endpoint: curl http://localhost:8082/
-  3. Access STAC Browser: http://$INSTANCE_IP:8080
-  4. Clone repo for catalog loading scripts (see README.txt)
-  5. Load STAC catalog data (see repo/deployment/scripts/USAGE_INSTRUCTIONS.md)
-  6. Configure IAM role for S3 access (if not already done)
+  2. Access STAC Browser: http://$DOMAIN_NAME:8080
+  3. Load STAC catalog data (IAM instance profile automatically provisioned for S3 access)
+     Example: python3 /opt/benchmarkcat/deployment/scripts/load_catalog.py /path/to/catalog
 
 Documentation: $INSTALL_DIR/README.txt
 
 Automated Features:
-  - Services auto-start on boot (systemd)
+  - Services auto-start on boot via systemd
   - Weekly database backups (Sunday 2 AM)
   - 7-day local backup retention
+  - Auto-sync to S3 Backup URI (if configured via Terraform)
 
 ================================================================================
 
