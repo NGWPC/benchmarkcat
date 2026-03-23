@@ -65,9 +65,7 @@ Verification:
 
 3. S3 MIGRATION (Cross-Account)
 --------------------------------
-Scripts:
-- deployment/s3_migration/migrate_s3.py
-- deployment/s3_migration/run_migration.sh
+Script: deployment/s3_migration/migrate_s3.py
 
 Prerequisites:
 - IAM migration role provisioned (owp-benchmarkcat-migration-role)

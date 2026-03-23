@@ -16,7 +16,7 @@ Complete guide for migrating STAC catalog and assets from NGWPC S3 to OWP S3 wit
 
 ## Overview
 
-This migration reorganizes your S3 bucket to separate STAC metadata from geospatial assets:
+This migration reorganizes the S3 bucket to separate STAC metadata from geospatial assets:
 
 **Destination Structure:**
 ```
@@ -43,33 +43,8 @@ s3://owp-benchmark/
 
 ## Quick Start
 
-### Interactive Migration (Recommended)
-
-Run the interactive script that guides you through each step:
-
 ```bash
 cd deployment/s3_migration
-
-# Set your AWS profile (optional)
-export AWS_PROFILE=your-profile-name
-
-# Run interactive migration
-./run_migration.sh
-```
-
-**This will:**
-1. Show dry run preview
-2. Download catalog and update HREFs
-3. Let you review changes
-4. Copy assets to destination (~8-12 hours)
-5. Upload updated catalog
-6. Verify results
-
-### Manual Migration
-
-For more control over each phase:
-
-```bash
 # 1. Dry run (preview changes)
 python migrate_s3.py \
   --source-bucket fimc-data \
@@ -229,7 +204,7 @@ python migrate_s3.py \
 
 Run from EC2 in OWP account with IAM role that has:
 - Write access to destination bucket
-- Read access to source bucket (via cross-account bucket policy)
+- Read access to source bucket
 
 **Source bucket policy** (on fimc-data bucket):
 ```json
@@ -275,18 +250,6 @@ Optional:
   --skip-upload                    Skip catalog upload (Phase 4)
   --dry-run                        Preview operations without changes
   --verbose                        Enable debug logging
-```
-
-### run_migration.sh
-
-Interactive script with built-in prompts and verification steps.
-
-```bash
-./run_migration.sh
-
-# Or set AWS profile first
-export AWS_PROFILE=your-profile
-./run_migration.sh
 ```
 
 ## Verification
@@ -419,91 +382,3 @@ python migrate_s3.py ... --skip-download --skip-update
 # Assets partially copied?
 ~/benchmark-catalog/copy_assets.sh  # Skips existing files
 ```
-
-## Post-Migration
-
-### Update STAC API Configuration
-
-Update your environment file:
-
-```bash
-# In /opt/benchmarkcat/.env
-STAC_S3_BUCKET=owp-benchmark
-STAC_S3_PREFIX=stac  # Note: changed from benchmark/stac-bench-cat
-```
-
-Restart services:
-
-```bash
-sudo /opt/benchmarkcat/restart-services.sh
-```
-
-### Verify STAC API
-
-```bash
-# Check API is running
-curl http://localhost:8082/ | jq '.'
-
-# List collections
-curl http://localhost:8082/collections | jq '.collections[].id'
-
-# Check sample item
-curl http://localhost:8082/collections/gfm-collection/items?limit=1 | \
-  jq '.features[0].assets[].href'
-# Should show: s3://owp-benchmark/data/gfm-collection/...
-```
-
-### Test GDAL VSI Access
-
-Verify that geospatial tools can read assets via S3:
-
-```bash
-# Get an asset URL from STAC
-ASSET_URL=$(curl -s "http://localhost:8082/collections/gfm-collection/items?limit=1" | \
-  jq -r '.features[0].assets | .[keys[0]].href')
-
-echo "Testing: $ASSET_URL"
-
-# Test with GDAL
-docker run --rm \
-  -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-  -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-  -e AWS_REGION=us-east-1 \
-  osgeo/gdal:alpine-small-latest \
-  gdalinfo /vsis3/${ASSET_URL#s3://}
-```
-
-### Set Up Backups
-
-Since metadata is now separated, you can backup just the STAC catalog:
-
-```bash
-# Backup STAC metadata (small, ~200MB)
-aws s3 sync s3://owp-benchmark/stac/ \
-  s3://owp-benchmark-backup/stac/ \
-  --profile your-profile
-
-# Schedule regular backups
-# Add to crontab:
-# 0 2 * * 0 aws s3 sync s3://owp-benchmark/stac/ s3://owp-benchmark-backup/stac/
-```
-
-### Update Documentation
-
-Update any references to S3 paths in your documentation:
-- Old: `s3://fimc-data/benchmark/stac-bench-cat/`
-- New: `s3://owp-benchmark/stac/`
-
-## Time and Cost Estimates
-
-### Time
-
-| Phase | Duration | Size |
-|-------|----------|------|
-| Download catalog | 5 min | ~200MB |
-| Update HREFs | 2 min | - |
-| Copy assets | 8-12 hours | ~1.5TB |
-| Upload catalog | 5 min | ~200MB |
-| **Total** | **~12 hours** | **~1.5TB** |
-
-*S3-to-S3 copy times vary by region and performance*

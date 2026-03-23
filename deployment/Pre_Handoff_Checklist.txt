@@ -1,0 +1,51 @@
+Pre-Production (OWP Handoff) Testing / Verification Checklist
+
+1. Bootstrap & Service Health
+- All 4 containers running: benchmarkcat-db, benchmarkcat-api, benchmarkcat-browser, benchmarkcat-asset-proxy
+- Health check passes (/opt/benchmarkcat/deployment/health-check.sh)
+- STAC API responds: curl http://localhost:8082/
+- STAC Browser loads: curl http://localhost:8080/
+
+2. API Endpoint Validation
+- Root endpoint returns JSON with title/metadata (/)
+- Conformance endpoint (/conformance)
+- Collections list returns all expected collections (/collections)
+- Search works with limit (/search?limit=10)
+- Search works with bbox filter and returns results under 500ms
+
+3. Database Integrity
+- Collection count matches expected (8 collections per migrate_s3.py PATH_MAPPINGS)
+- Item counts per collection are correct (SELECT collection, COUNT(*) FROM pgstac.items GROUP BY collection)
+- Total item count matches source catalog
+
+4. Asset Proxy & S3 Access
+Run deployment/scripts/test_asset_proxy.sh which covers:
+- Asset-proxy health endpoint (http://localhost:8083/health)
+- IAM instance profile / AWS credentials are valid (STS caller identity)
+- Sample assets queryable from database
+- Direct S3 access works via IAM role (aws s3 ls s3://owp-benchmark/data/)
+- Proxy URL serves assets with correct Content-Type (http://localhost:8083/s3/{bucket}/{key})
+
+5. GDAL / Raster Access
+- GDAL can read assets via VSI: gdalinfo /vsis3/{bucket}/{key}
+- COG rendering works through the proxy (Range request support)
+
+6. STAC Browser UI
+- All collections visible and browsable
+- Individual items display correctly with metadata
+- Asset links resolve (either via proxy or direct S3)
+
+7. QGIS Integration
+- Connect QGIS to STAC API endpoint
+- Load a raster data layer from a collection
+- Verify data renders correctly
+
+8. Performance
+- Concurrent load test: ab -n 1000 -c 10 http://localhost:8082/collections
+- API response times < 500ms for search queries
+- No errors under concurrent load
+
+9. Monitoring & Ops
+- CloudWatch logging is active
+- PostgreSQL automated backups configured
+- Systemd service enabled for auto-start (systemctl status benchmarkcat)
