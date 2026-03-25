@@ -34,7 +34,11 @@ Examples:
 
 **Important**: The collection ingestion automatically filters events to include **only the latest revision** for each FSD ID.
 
-If multiple revisions exist on S3 for the same event (e.g., `FSD-1279_R1`, `FSD-1279_R3`, `FSD-1279_R6`), only the highest revision number (`R6`) will be processed and added to the collection. This ensures the catalog contains only the most up-to-date data for each event.
+ICEYE revisions are cumulative — each new revision incorporates all previous SAR satellite passes plus additional ones. As a result, later revisions have larger geographic coverage (the bounding box expands as new passes observe new areas), more detected flooded area, and an updated event timeline. A later revision is strictly a superset of earlier ones, so there is no unique information in an earlier revision that isn't captured and improved upon in the latest.
+
+If multiple revisions exist on S3 for the same event (e.g., `FSD-1279_R1`, `FSD-1279_R3`, `FSD-1279_R6`), only the highest revision number (`R6`) will be processed and added to the collection.
+
+All revision directories are preserved on S3, so prior revisions remain accessible for historical progression analysis if needed.
 
 **Example**:
 - Input: `FSD-1279_R1/`, `FSD-1279_R6/`, `FSD-2082_R1/`, `FSD-2227_R2/`, `FSD-2227_R3/`

@@ -2,14 +2,13 @@ import copy
 import json
 import logging
 import os
-import random
 import tempfile
 import time
 from typing import Any, Dict, List
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import MultiPoint, mapping, shape
+from shapely.geometry import mapping, shape
 
 from ingest.flows import AnaFlowProcessor
 from ingest.iceye.iceye_stac import AssetUtils, ICEYEInfo, extract_dates_from_metadata
@@ -222,8 +221,8 @@ class ICEYEAssetHandler:
                 logging.info(f"Downloading extent file: {os.path.basename(extent_file)}")
                 self.s3_utils.s3_client.download_file(self.bucket_name, extent_file, local_path)
 
-                # Read and reproject to WGS84
-                gdf = gpd.read_file(local_path)
+                # Read only geometry column to minimise memory usage
+                gdf = gpd.read_file(local_path, columns=[])
                 logging.info(f"Read {len(gdf)} features from extent file")
 
                 wkt2_string = gdf.crs.to_wkt() if gdf.crs else None
@@ -236,30 +235,14 @@ class ICEYEAssetHandler:
                     logging.warning(f"No geometries found in extent file {extent_file}")
                     return None, None, None
 
-                # Compute convex hull from all coordinates
+                # Compute convex hull of each feature first to shed interior detail,
+                # then union the lightweight hulls. This avoids holding all polygon
+                # vertices in memory at once (critical for large extents like FSD-2397).
                 logging.info(f"Processing {len(gdf)} feature(s) for convex hull")
-
-                # Simplify if dataset is large
-                geometries = gdf.geometry
-                if len(geometries) > 1000:
-                    logging.info(f"Simplifying {len(geometries)} geometries")
-                    geometries = geometries.simplify(tolerance=0.001, preserve_topology=False)
-
-                # Extract all coordinates
-                all_coords = []
-                for geom in geometries:
-                    coords = self._extract_coords_from_geometry(geom)
-                    all_coords.extend(coords)
-
-                logging.info(f"Extracted {len(all_coords)} coordinate points")
-
-                # Sample if too many points
-                if len(all_coords) > 10000:
-                    all_coords = random.sample(all_coords, 10000)
-                    logging.info(f"Sampled down to {len(all_coords)} points")
-
-                # Compute convex hull
-                convex_hull = MultiPoint(all_coords).convex_hull
+                per_feature_hulls = gdf.geometry.convex_hull
+                del gdf
+                convex_hull = per_feature_hulls.unary_union.convex_hull
+                del per_feature_hulls
                 logging.info("Convex hull computed")
 
                 geometry_dict = mapping(convex_hull)
@@ -270,22 +253,6 @@ class ICEYEAssetHandler:
         except Exception as e:
             logging.error(f"Error extracting geometry from {extent_file}: {e}")
             return None, None, None
-
-    def _extract_coords_from_geometry(self, geom) -> list:
-        """Helper method to extract coordinates from any geometry type."""
-        coords = []
-
-        if geom.geom_type == "Polygon":
-            coords.extend(geom.exterior.coords)
-        elif geom.geom_type == "MultiPolygon":
-            for poly in geom.geoms:
-                coords.extend(poly.exterior.coords)
-        elif geom.geom_type == "Point":
-            coords.append(geom.coords[0])
-        elif geom.geom_type == "MultiPoint":
-            coords.extend([pt.coords[0] for pt in geom.geoms])
-
-        return coords
 
     def calculate_flooded_area(self, all_files: List[str], metadata: Dict) -> float:
         """
@@ -629,7 +596,3 @@ class ICEYEAssetHandler:
             logging.error(
                 f"Failed to upload {self.local_results_file} to s3://{self.bucket_name}/{self.derived_metadata_path}: {e}"
             )
-        finally:
-            if os.path.exists(self.local_results_file):
-                os.remove(self.local_results_file)
-                logging.info(f"Removed local file {self.local_results_file}")
