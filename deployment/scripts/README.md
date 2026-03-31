@@ -67,7 +67,7 @@ Step 4: Loading collections and items...
 
 SUMMARY
 Collections loaded: 8
-Items loaded: 22,845
+Items loaded: ~22,800
 Items failed: 0
 ```
 

@@ -831,6 +831,7 @@ SYSTEMD_EOF
 
     sudo systemctl daemon-reload
     sudo systemctl enable benchmarkcat.service
+    sudo systemctl start benchmarkcat.service
     echo "[$(date)] Systemd service configured"
 else
     echo "[$(date)] Systemd not available (skipping service configuration)"

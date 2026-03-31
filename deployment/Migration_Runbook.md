@@ -2,7 +2,7 @@
 
 ## Context
 
-BenchmarkCat is a STAC geospatial catalog (~22,845 items, 8 collections, ~1.5 TB assets) currently hosted in NGWPC's `fimc-data` S3 bucket. This runbook consolidates existing documentation (`Deployment_Guide.txt`, `Deployment_Strategy_Overview_OWP.md`, `s3_migration/README.md`, `terraform/README.md`) into a single executable plan for migrating to OWP's infrastructure: new S3 bucket (`owp-benchmark`), EC2 with Docker stack (pgSTAC, STAC API, STAC Browser, asset-proxy), Terraform-managed infrastructure, and full validation.
+BenchmarkCat is a STAC geospatial catalog (~23,800 items, 8 collections, ~1.5 TB assets) currently hosted in NGWPC's `fimc-data` S3 bucket. This runbook consolidates existing documentation (`Deployment_Guide.txt`, `Deployment_Strategy_Overview_OWP.md`, `s3_migration/README.md`, `terraform/README.md`) into a single executable plan for migrating to OWP's infrastructure: new S3 bucket (`owp-benchmark`), EC2 with Docker stack (pgSTAC, STAC API, STAC Browser, asset-proxy), Terraform-managed infrastructure, and full validation.
 
 ---
 
@@ -99,6 +99,20 @@ docker ps  # Expect: benchmarkcat-db, benchmarkcat-api, benchmarkcat-browser, be
 
 **State after Phase 1:** 4 containers running, empty database, API on 8082, Browser on 8080, proxy on 8083.
 
+### 1.4 Clone Repository
+
+Scripts referenced in later phases live in this repo. Clone it to the expected path on the EC2 instance:
+
+```bash
+sudo git clone https://github.com/NGWPC/benchmarkcat.git /opt/benchmarkcat/repo -b owp-deployment
+```
+
+Verify:
+```bash
+ls /opt/benchmarkcat/repo/deployment/scripts/
+# Expected: load_catalog.py, rewrite_asset_urls.py, test_asset_proxy.sh, reset_database.sh, etc.
+```
+
 ---
 
 ## Phase 2: S3 Migration
@@ -175,13 +189,13 @@ aws s3 sync s3://owp-benchmark/stac/ ~/stac-catalog/ --exclude "*" --include "*.
 
 ### 3.2 Load to pgstac
 ```bash
-export PGPASSWORD=$(cat /opt/benchmarkcat/.db_password)
+export PGPASSWORD=$(sudo cat /opt/benchmarkcat/.db_password)
 
 python3 /opt/benchmarkcat/repo/deployment/scripts/load_catalog.py \
   ~/stac-catalog --db-host localhost --db-password $PGPASSWORD --dry-run
 
 python3 /opt/benchmarkcat/repo/deployment/scripts/load_catalog.py \
-  ~/stac-catalog --db-host localhost --db-password $PGPASSWORD --batch-size 100
+  ~/stac-catalog --db-host localhost --db-password $PGPASSWORD 
 ```
 
 ### 3.3 Verify
@@ -189,11 +203,11 @@ python3 /opt/benchmarkcat/repo/deployment/scripts/load_catalog.py \
 docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \
   "SELECT collection, COUNT(*) FROM pgstac.items GROUP BY collection ORDER BY collection;"
 
-# Total ~22,845
+# Total ~23,000
 docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \
   "SELECT COUNT(*) FROM pgstac.items;"
 
-curl http://localhost:8082/collections | jq '.collections | length'   # 8
+curl http://localhost:8082/collections | jq '.collections | length'
 ```
 
 **Rollback:** Reset database with `deployment/scripts/reset_database.sh --force` and re-load.
@@ -264,7 +278,7 @@ time curl -s "http://${HOST_IP}:8082/search?bbox=-90,30,-80,40&limit=10" > /dev/
 docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \
   "SELECT collection, COUNT(*) FROM pgstac.items GROUP BY collection ORDER BY collection;"
 ```
-Verify collection count matches expected (8 collections) and total item count matches source catalog (~22,845).
+Verify collection count matches expected (8 collections) and total item count matches source catalog (~22,800).
 
 ### 5.4 Asset Proxy & S3 Access
 ```bash

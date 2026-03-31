@@ -60,7 +60,7 @@ Application Layer:
 
 Storage Layer:
 - S3 Bucket (fimc-data): 1.5 TB of geospatial assets
-- STAC Catalog: 22,845 catalog files
+- STAC Catalog: 22,798 catalog files
 
 Access Layer:
 - OWP users: AWS SSO for S3, HTTP for STAC API
@@ -132,7 +132,7 @@ Access Layer:
 ### **Proposed re-structuring of current S3 paths (example):**
 ```
   s3://owp-benchmark/
-  ├── stac/                                    # STAC metadata (22,845 files, ~200MB)
+  ├── stac/                                    # STAC metadata (~22,800 files, ~200MB)
   │   ├── catalog.json                         # Root catalog
   │   ├── collections/
   │   │   ├── gfm-collection/
@@ -190,7 +190,7 @@ Access Layer:
 2. Plan S3 data transfer (NGWPC S3 → OWP S3, or cross-account access)
 3. Provision OWP AWS resources
 4. Deploy docker-compose stack
-5. Load full STAC catalog (22,845 files) to PostgreSQL
+5. Load full STAC catalog (~22,800 files) to PostgreSQL
 6. Validate S3 asset accessibility
 
 ### Phase 3: Validation & Launch
