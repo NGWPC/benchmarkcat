@@ -86,6 +86,8 @@ Creates: Security group (8080/8082/8083 + SSH to VPC), IAM role with dynamic S3 
 
 The bootstrap is automated via `deployment/terraform/templates/user_data_standalone.sh.tpl` (or can be run manually with `deployment/terraform/user-data/owp-bootstrap.sh`). It installs Docker, Docker Compose, creates the 4-container stack, systemd service, and cron backups.
 
+**Note:** The bootstrap generates utility scripts (`health-check.sh`, `backup-db.sh`, `restart-services.sh`) on the EC2 instance at `/opt/benchmarkcat/deployment/`. These are not present in the repository.
+
 ```bash
 terraform output standalone_instance_ip
 ssh -i ~/.ssh/owp-benchmarkcat-key.pem ubuntu@<ec2-ip>
@@ -104,6 +106,7 @@ docker ps  # Expect: benchmarkcat-db, benchmarkcat-api, benchmarkcat-browser, be
 Scripts referenced in later phases live in this repo. Clone it to the expected path on the EC2 instance:
 
 ```bash
+# Use owp-deployment branch (or main if already merged)
 sudo git clone https://github.com/NGWPC/benchmarkcat.git /opt/benchmarkcat/repo -b owp-deployment
 ```
 
@@ -118,7 +121,7 @@ ls /opt/benchmarkcat/repo/deployment/scripts/
 ## Phase 2: S3 Migration
 
 Script: `deployment/s3_migration/migrate_s3.py`
-Reference: `deployment/s3_migration/README.md`
+Reference: `deployment/s3_migration/S3_README.md`
 
 ### 2.1 Dry Run
 ```bash
@@ -146,13 +149,17 @@ Verify all 8 path mappings displayed (defined in `migrate_s3.py` `PATH_MAPPINGS`
 ### 2.2 Execute Migration
 
 ```bash
-# Download catalog + update HREFs
+# Download catalog + update HREFs + generate copy script
 python3 migrate_s3.py \
-  --source-bucket fimc-data --dest-bucket owp-benchmark --skip-upload
+  --source-bucket fimc-data --dest-bucket owp-benchmark \
+  --generate-copy-commands --skip-upload
 
 # Review sample HREF
 cat ~/benchmark-catalog/dest_catalog/gfm-collection/items/*/item.json | jq '.assets[].href' | head -5
 # Expected: s3://owp-benchmark/data/gfm-collection/...
+
+# Review migration manifest (all HREF changes logged for auditing)
+jq 'length' ~/benchmark-catalog/migration_manifest.json
 
 # Copy assets
 ~/benchmark-catalog/copy_assets.sh
@@ -172,6 +179,18 @@ aws s3 ls s3://owp-benchmark/stac/ --recursive | wc -l    # ~22,000
 aws s3 ls s3://owp-benchmark/data/ --recursive | wc -l
 aws s3 cp s3://owp-benchmark/stac/catalog.json - | jq '.'
 aws s3 ls s3://owp-benchmark/data/                          # 8 collection dirs
+```
+
+### 2.4 Finalize Bucket Configuration
+
+**Enable S3 Versioning**
+Enable versioning on the bucket to protect the STAC metadata from accidental overwrites or deletions. 
+This is especially critical for the `stac/` prefix which contains the catalog's structural definitions.
+
+```bash
+aws s3api put-bucket-versioning \
+  --bucket owp-benchmark \
+  --versioning-configuration Status=Enabled
 ```
 
 **Recovery:** `copy_assets.sh` is idempotent -- re-run on failure, it skips existing files.
@@ -323,9 +342,10 @@ ls -lh /opt/backups/postgres/
 ## Phase 6: Post-Deployment
 
 ### 6.1 Update .env
-If `S3_BUCKET` is empty in `/opt/benchmarkcat/deployment/.env`:
+The `.env` file is generated during bootstrap at `/opt/benchmarkcat/deployment/.env`. If `S3_BUCKET` is empty:
 ```bash
-# Set S3_BUCKET=owp-benchmark in .env
+# Set the destination bucket
+sed -i 's/^S3_BUCKET=.*/S3_BUCKET=owp-benchmark/' /opt/benchmarkcat/deployment/.env
 sudo /opt/benchmarkcat/deployment/restart-services.sh
 ```
 
@@ -334,7 +354,16 @@ sudo /opt/benchmarkcat/deployment/restart-services.sh
 sudo /opt/benchmarkcat/deployment/backup-db.sh
 ```
 
-### 6.3 Record Final Config
+### 6.3 Sync Project Documentation to S3 (Optional)
+
+```bash
+mkdir -p /opt/benchmarkcat/repo/docs/
+cp /opt/benchmarkcat/repo/deployment/*.md /opt/benchmarkcat/repo/docs/
+cp /opt/benchmarkcat/repo/deployment/*.txt /opt/benchmarkcat/repo/docs/
+aws s3 sync /opt/benchmarkcat/repo/docs/ s3://owp-benchmark/docs/
+```
+
+### 6.4 Record Final Config
 ```
 EC2 IP:        terraform output standalone_instance_ip
 STAC API:      http://<ip>:8082
@@ -381,12 +410,12 @@ Phase 6 (Post-Deployment)
 | `deployment/terraform/templates/user_data_standalone.sh.tpl` | Bootstrap template (used by Terraform) |
 | `deployment/terraform/user-data/owp-bootstrap.sh` | Bootstrap script (manual execution) |
 | `deployment/s3_migration/migrate_s3.py` | Core migration with PATH_MAPPINGS |
-| `deployment/s3_migration/README.md` | Detailed migration guide |
+| `deployment/s3_migration/S3_README.md` | Detailed migration guide |
 | `deployment/scripts/load_catalog.py` | pgstac catalog loader |
 | `deployment/scripts/rewrite_asset_urls.py` | S3 -> proxy URL rewriter |
 | `deployment/scripts/test_asset_proxy.sh` | Proxy validation |
 | `deployment/scripts/reset_database.sh` | Database reset utility |
-| `deployment/scripts/README.md` | Script documentation |
+| `deployment/scripts/Scripts_README.md` | Script documentation |
 | `deployment/asset-proxy/app.py` | FastAPI S3 streaming proxy |
 | `deployment/Deployment_Guide.txt` | Original deployment guide |
 | `deployment/Deployment_Strategy_Overview_OWP.md` | Architecture & cost analysis |
