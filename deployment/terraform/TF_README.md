@@ -52,6 +52,8 @@ backup_s3_uri  = "s3://your-data-bucket/backups/stac-db/"
 
 # Logging
 log_retention_days = 7
+
+# key_name = "your-aws-key-pair-name"  # Optional: required for SSH access
 ```
 
 ### backend.tf
@@ -78,6 +80,7 @@ terraform {
 - `instance_type`: The EC2 instance type (e.g., "t3.xlarge").
 - `ubuntu_version`: The Ubuntu release version (default: "jammy-22.04").
 - `architecture`: The CPU architecture, either "amd64" or "arm64".
+- `key_name`: (Optional) The name of an existing EC2 key pair. Required if you need SSH access to the instance.
 
 ### S3 Access and Backups
 - `s3_read_paths`: A list of S3 bucket paths or prefixes that the application needs to read from.
@@ -116,3 +119,4 @@ Upon successful application, Terraform will provide several outputs:
 - stac_api_url: The fully qualified URL for the STAC API.
 - stac_browser_url: The fully qualified URL for the STAC Browser.
 - standalone_instance_ip: The private IP of the instance for internal access.
+- ssh_instructions: The SSH command to connect to the instance (requires `key_name` to be set).

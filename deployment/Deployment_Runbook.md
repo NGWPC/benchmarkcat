@@ -1,8 +1,15 @@
-# BenchmarkCat STAC: Consolidated Migration & Deployment Runbook
+# BenchmarkCat STAC: Deployment Runbook
 
-## Context
+## Overview & Architecture
 
-BenchmarkCat is a STAC geospatial catalog (~23,800 items, 8 collections, ~1.5 TB assets) currently hosted in NGWPC's `fimc-data` S3 bucket. This runbook consolidates existing documentation (`Deployment_Guide.txt`, `Deployment_Strategy_Overview_OWP.md`, `s3_migration/README.md`, `terraform/README.md`) into a single executable plan for migrating to OWP's infrastructure: new S3 bucket (`owp-benchmark`), EC2 with Docker stack (pgSTAC, STAC API, STAC Browser, asset-proxy), Terraform-managed infrastructure, and full validation.
+BenchmarkCat is a STAC geospatial catalog (~23,800 items, 8 collections, ~1.5 TB assets) migrating from NGWPC's infrastructure to OWP's infrastructure.
+
+| Component | Details |
+|-----------|---------|
+| EC2 Instance | t3.xlarge (4 vCPU, 16 GB RAM) |
+| Services | PostgreSQL (5432), STAC API (8082), STAC Browser (8080), asset-proxy (8083) |
+| Storage | S3 bucket (`owp-benchmark`) with `stac/`, `data/`, `docs/` directories |
+| Bootstrap | Automated via `deployment/terraform/templates/user_data_standalone.sh.tpl` or manually via `deployment/terraform/user-data/owp-bootstrap.sh` |
 
 ---
 
@@ -17,12 +24,12 @@ BenchmarkCat is a STAC geospatial catalog (~23,800 items, 8 collections, ~1.5 TB
 
 ### 0.2 Cross-Account IAM Setup
 
-**OWP side** -- create a temporary migration role:
+**OWP side** — create a temporary migration role:
 - Role name: `owp-benchmarkcat-migration-role` (EC2 trust policy)
-- Attached policy 1 (source read): `s3:GetObject` and `s3:ListBucket` on `s3://fimc-data/benchmark/*` and `s3://fimc-data/hand_fim/test_cases/*`
-- Attached policy 2 (dest write): `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on `s3://owp-benchmark/*`
+- Policy 1 (source read): `s3:GetObject` and `s3:ListBucket` on `s3://fimc-data/benchmark/*` and `s3://fimc-data/hand_fim/test_cases/*`
+- Policy 2 (dest write): `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on `s3://owp-benchmark/*`
 
-**NGWPC side** -- If necessary, update `fimc-data` bucket policy to grant cross-account read access.
+**NGWPC side** — update `fimc-data` bucket policy to grant cross-account read access **if necessary**.
 
 ### 0.3 Verify Cross-Account Access
 ```bash
@@ -31,7 +38,7 @@ aws s3 ls s3://fimc-data/benchmark/ | head -5
 aws s3 ls s3://fimc-data/benchmark/stac-bench-cat/ | head -5
 ```
 
-### 0.4 Create Destination Bucket (if needed)
+### 0.4 Create Destination Bucket (can be different, i.e. `benchmark-catalog`)
 ```bash
 aws s3 mb s3://owp-benchmark --region us-east-1
 ```
@@ -46,7 +53,7 @@ aws s3 mb s3://owp-benchmark --region us-east-1
 
 Working dir: `deployment/terraform/`
 
-Create `terraform.tfvars` (template in `deployment/terraform/README.md`):
+Create `terraform.tfvars` (template in `deployment/terraform/TF_README.md`):
 ```hcl
 environment        = "test"
 aws_region         = "us-east-1"
@@ -62,15 +69,10 @@ s3_read_paths        = ["owp-benchmark/*"]
 s3_write_paths       = ["owp-benchmark/backups/*"]
 backup_s3_uri        = "s3://owp-benchmark/backups/stac-db/"
 log_retention_days   = 7
+# key_name = "your-aws-key-pair-name"  # Optional: required for SSH access
 ```
 
 Create `backend.tf` for remote state (S3 backend recommended).
-
-Key Terraform files:
-- `deployment/terraform/main.tf` -- IAM roles, security groups, EC2, optional ALB/ASG
-- `deployment/terraform/variables.tf` -- all configurable inputs (60+ variables)
-- `deployment/terraform/data.tf` -- VPC/subnet/AMI lookups
-- `deployment/terraform/outputs.tf` -- API URL, instance IP, SSH instructions
 
 ### 1.2 Deploy
 ```bash
@@ -84,18 +86,20 @@ Creates: Security group (8080/8082/8083 + SSH to VPC), IAM role with dynamic S3 
 
 ### 1.3 Verify Bootstrap
 
-The bootstrap is automated via `deployment/terraform/templates/user_data_standalone.sh.tpl` (or can be run manually with `deployment/terraform/user-data/owp-bootstrap.sh`). It installs Docker, Docker Compose, creates the 4-container stack, systemd service, and cron backups.
-
-**Note:** The bootstrap generates utility scripts (`health-check.sh`, `backup-db.sh`, `restart-services.sh`) on the EC2 instance at `/opt/benchmarkcat/deployment/`. These are not present in the repository.
-
 ```bash
 terraform output standalone_instance_ip
-ssh -i ~/.ssh/owp-benchmarkcat-key.pem ubuntu@<ec2-ip>
+
+# Connect via SSH — requires key_name set in terraform.tfvars
+# terraform output ssh_instructions prints the command with the correct IP
+terraform output ssh_instructions
+ssh -i /path/to/your-key.pem ubuntu@<standalone_instance_ip>
 
 cat /var/log/benchmarkcat/bootstrap.log
 /opt/benchmarkcat/deployment/health-check.sh
 docker ps  # Expect: benchmarkcat-db, benchmarkcat-api, benchmarkcat-browser, benchmarkcat-asset-proxy
 ```
+
+**Note:** The bootstrap generates utility scripts (`health-check.sh`, `backup-db.sh`, `restart-services.sh`) on the EC2 instance at `/opt/benchmarkcat/deployment/`. These are not present in the repository.
 
 **Rollback:** `terraform destroy -var-file="terraform.tfvars"`
 
@@ -103,10 +107,7 @@ docker ps  # Expect: benchmarkcat-db, benchmarkcat-api, benchmarkcat-browser, be
 
 ### 1.4 Clone Repository
 
-Scripts referenced in later phases live in this repo. Clone it to the expected path on the EC2 instance:
-
 ```bash
-# Use owp-deployment branch (or main if already merged)
 sudo git clone https://github.com/NGWPC/benchmarkcat.git /opt/benchmarkcat/repo -b owp-deployment
 ```
 
@@ -132,7 +133,8 @@ python3 migrate_s3.py \
   --dest-bucket owp-benchmark \
   --dry-run --verbose
 ```
-Verify all 8 path mappings displayed (defined in `migrate_s3.py` `PATH_MAPPINGS`):
+
+Verify all 8 path mappings are displayed (`PATH_MAPPINGS` in `migrate_s3.py`):
 
 | Collection | Source | Destination |
 |---|---|---|
@@ -158,10 +160,10 @@ python3 migrate_s3.py \
 cat ~/benchmark-catalog/dest_catalog/gfm-collection/items/*/item.json | jq '.assets[].href' | head -5
 # Expected: s3://owp-benchmark/data/gfm-collection/...
 
-# Review migration manifest (all HREF changes logged for auditing)
+# Review migration manifest
 jq 'length' ~/benchmark-catalog/migration_manifest.json
 
-# Copy assets
+# Copy assets (~8-12 hours)
 ~/benchmark-catalog/copy_assets.sh
 
 # Monitor in another terminal:
@@ -173,6 +175,8 @@ python3 migrate_s3.py \
   --skip-download --skip-update
 ```
 
+**Recovery:** `copy_assets.sh` is idempotent — re-run on failure, it skips existing files.
+
 ### 2.3 Verify Migration
 ```bash
 aws s3 ls s3://owp-benchmark/stac/ --recursive | wc -l    # ~22,000
@@ -181,11 +185,7 @@ aws s3 cp s3://owp-benchmark/stac/catalog.json - | jq '.'
 aws s3 ls s3://owp-benchmark/data/                          # 8 collection dirs
 ```
 
-### 2.4 Finalize Bucket Configuration
-
-**Enable S3 Versioning**
-Enable versioning on the bucket to protect the STAC metadata from accidental overwrites or deletions. 
-This is especially critical for the `stac/` prefix which contains the catalog's structural definitions.
+### 2.4 Enable S3 Versioning
 
 ```bash
 aws s3api put-bucket-versioning \
@@ -193,11 +193,29 @@ aws s3api put-bucket-versioning \
   --versioning-configuration Status=Enabled
 ```
 
-**Recovery:** `copy_assets.sh` is idempotent -- re-run on failure, it skips existing files.
+### 2.5 Enable Intelligent-Tiering on data/
+
+Applies only to `data/` — `stac/` catalog files stay in STANDARD to avoid retrieval latency.
+
+```bash
+aws s3api put-bucket-intelligent-tiering-configuration \
+  --bucket owp-benchmark \
+  --id data-tiering \
+  --intelligent-tiering-configuration '{
+    "Id": "data-tiering",
+    "Status": "Enabled",
+    "Filter": {"Prefix": "data/"},
+    # If desired, add/modify Tierings. 
+    # "Tierings": [
+    #   {"Days": 90,  "AccessTier": "ARCHIVE_ACCESS"},
+    #   {"Days": 180, "AccessTier": "DEEP_ARCHIVE_ACCESS"}
+    # ]
+  }'
+```
 
 ---
 
-## Phase 3: Catalog Loading (From EC2 Server)
+## Phase 3: Catalog Loading
 
 Script: `deployment/scripts/load_catalog.py`
 
@@ -214,7 +232,7 @@ python3 /opt/benchmarkcat/repo/deployment/scripts/load_catalog.py \
   ~/stac-catalog --db-host localhost --db-password $PGPASSWORD --dry-run
 
 python3 /opt/benchmarkcat/repo/deployment/scripts/load_catalog.py \
-  ~/stac-catalog --db-host localhost --db-password $PGPASSWORD 
+  ~/stac-catalog --db-host localhost --db-password $PGPASSWORD
 ```
 
 ### 3.3 Verify
@@ -222,9 +240,8 @@ python3 /opt/benchmarkcat/repo/deployment/scripts/load_catalog.py \
 docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \
   "SELECT collection, COUNT(*) FROM pgstac.items GROUP BY collection ORDER BY collection;"
 
-# Total ~23,000
 docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \
-  "SELECT COUNT(*) FROM pgstac.items;"
+  "SELECT COUNT(*) FROM pgstac.items;"  # Total ~23,000
 
 curl http://localhost:8082/collections | jq '.collections | length'
 ```
@@ -245,7 +262,7 @@ The asset-proxy service (`deployment/asset-proxy/app.py`) streams S3 content usi
 sudo /opt/benchmarkcat/repo/deployment/scripts/test_asset_proxy.sh
 ```
 
-This tests: proxy health endpoint, AWS credentials, sample asset query from DB, direct S3 access, proxy URL serving.
+Tests: proxy health endpoint, AWS credentials, sample asset query from DB, direct S3 access, proxy URL serving.
 
 ### 4.2 Rewrite
 ```bash
@@ -261,7 +278,7 @@ python3 /opt/benchmarkcat/repo/deployment/scripts/rewrite_asset_urls.py \
   --db-host localhost --db-password $PGPASSWORD
 ```
 
-Transforms: `s3://owp-benchmark/data/...` -> `http://<HOST_IP>:8083/s3/owp-benchmark/data/...`
+Transforms: `s3://owp-benchmark/data/...` → `http://<HOST_IP>:8083/s3/owp-benchmark/data/...`
 
 **Note:** Use private VPC IP for internal access, or domain name if DNS is configured for external users.
 
@@ -274,130 +291,61 @@ curl -s "http://${HOST_IP}:8082/collections/gfm-collection/items?limit=1" | \
 
 ---
 
-## Phase 5: Validation
+## Phase 5: Post-Deployment
 
-### 5.1 Service Health
-```bash
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-/opt/benchmarkcat/deployment/health-check.sh
-```
-All 4 containers running: `benchmarkcat-db`, `benchmarkcat-api`, `benchmarkcat-browser`, `benchmarkcat-asset-proxy`
+### 5.1 Update .env (if needed)
 
-### 5.2 API Endpoints
-```bash
-curl http://${HOST_IP}:8082/ | jq '.title'
-curl http://${HOST_IP}:8082/conformance | jq '.conformsTo | length'
-curl http://${HOST_IP}:8082/collections | jq '.collections[].id'
-curl "http://${HOST_IP}:8082/search?limit=10" | jq '.features | length'
-time curl -s "http://${HOST_IP}:8082/search?bbox=-90,30,-80,40&limit=10" > /dev/null  # < 500ms
-```
-
-### 5.3 Database Integrity
-```bash
-docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \
-  "SELECT collection, COUNT(*) FROM pgstac.items GROUP BY collection ORDER BY collection;"
-```
-Verify collection count matches expected (8 collections) and total item count matches source catalog (~22,800).
-
-### 5.4 Asset Proxy & S3 Access
-```bash
-sudo /opt/benchmarkcat/repo/deployment/scripts/test_asset_proxy.sh
-```
-
-### 5.5 GDAL/COG Rendering
-```bash
-SAMPLE_URL=$(curl -s "http://${HOST_IP}:8082/collections/gfm-collection/items?limit=1" | \
-  jq -r '.features[0].assets | .[keys[0]].href')
-curl -s -I -H "Range: bytes=0-1023" "$SAMPLE_URL" | grep -i "content-range"
-# Expect: HTTP 206 with Content-Range header
-```
-
-### 5.6 STAC Browser UI
-Open `http://<ec2-ip>:8080`:
-- All collections visible and browsable
-- Individual items display correctly with metadata
-- Asset links resolve (thumbnails load, download links work)
-
-### 5.7 QGIS Integration
-- Connect QGIS to `http://<ec2-ip>:8082`
-- Load a raster layer from a collection
-- Verify data renders correctly
-
-### 5.8 Performance
-```bash
-ab -n 1000 -c 10 http://${HOST_IP}:8082/collections
-# No errors, mean response < 500ms
-```
-
-### 5.9 Monitoring & Ops
-```bash
-systemctl status benchmarkcat
-crontab -l | grep backup-db.sh          # Sunday 2 AM
-sudo /opt/benchmarkcat/deployment/backup-db.sh
-ls -lh /opt/backups/postgres/
-```
-
----
-
-## Phase 6: Post-Deployment
-
-### 6.1 Update .env
 The `.env` file is generated during bootstrap at `/opt/benchmarkcat/deployment/.env`. If `S3_BUCKET` is empty:
 ```bash
-# Set the destination bucket
 sed -i 's/^S3_BUCKET=.*/S3_BUCKET=owp-benchmark/' /opt/benchmarkcat/deployment/.env
 sudo /opt/benchmarkcat/deployment/restart-services.sh
 ```
 
-### 6.2 Initial Backup
+### 5.2 Initial Backup
 ```bash
 sudo /opt/benchmarkcat/deployment/backup-db.sh
 ```
 
-### 6.3 Sync Project Documentation to S3 (Optional)
+---
 
-```bash
-mkdir -p /opt/benchmarkcat/repo/docs/
-cp /opt/benchmarkcat/repo/deployment/*.md /opt/benchmarkcat/repo/docs/
-cp /opt/benchmarkcat/repo/deployment/*.txt /opt/benchmarkcat/repo/docs/
-aws s3 sync /opt/benchmarkcat/repo/docs/ s3://owp-benchmark/docs/
-```
+## Rollback Plan
 
-### 6.4 Record Final Config
-```
-EC2 IP:        terraform output standalone_instance_ip
-STAC API:      http://<ip>:8082
-STAC Browser:  http://<ip>:8080
-Asset Proxy:   http://<ip>:8083
-SSH:           ssh -i ~/.ssh/owp-benchmarkcat-key.pem ubuntu@<ip>
-DB Password:   /opt/benchmarkcat/.db_password
-```
+If deployment fails:
+
+1. Preserve logs from `/var/log/benchmarkcat/`
+2. Infrastructure team destroys resources: `terraform destroy -var-file="terraform.tfvars"`
+3. Clean S3 destination bucket if needed (optional)
 
 ---
 
-## Dependency Graph
+## Troubleshooting
 
-```
-Phase 0 (IAM/Coordination)
-    |
-    v
-Phase 1 (Terraform)
-    |
-    v
-Phase 2 (S3 Migration)
-    |
-    v
-Phase 3 (Catalog Loading)
-    |
-    v
-Phase 4 (URL Rewriting)
-    |
-    v
-Phase 5 (Validation)
-    |
-    v
-Phase 6 (Post-Deployment)
-```
+### STAC Browser — WebGL Map Not Rendering (Chrome)
+
+If the OpenLayers map is blank in Chrome, WebGL may be disabled:
+
+1. **Enable Hardware Acceleration:** Chrome Settings → System → turn on "Use graphics acceleration when available" → restart Chrome
+2. **Enable WebGL flags:** go to `chrome://flags/#ignore-gpu-blocklist` → set "Override software rendering list" to Enabled → restart Chrome
+3. Verify at `https://get.webgl.org/` — you should see a spinning cube
+
+Alternatively, use Firefox.
+
+---
+
+## Operational Scripts
+
+| Script | Path |
+|--------|------|
+| Health Check | `/opt/benchmarkcat/deployment/health-check.sh` |
+| Restart Services | `/opt/benchmarkcat/deployment/restart-services.sh` |
+| Stop Services | `/opt/benchmarkcat/deployment/stop-services.sh` |
+| Start Services | `/opt/benchmarkcat/deployment/start-services.sh` |
+| View Logs | `/opt/benchmarkcat/deployment/view-logs.sh` |
+| Backup Database | `/opt/benchmarkcat/deployment/backup-db.sh` |
+| Test Asset Proxy | `deployment/scripts/test_asset_proxy.sh` |
+| Rewrite Asset URLs | `deployment/scripts/rewrite_asset_urls.py` |
+
+---
 
 ## Key Files
 
@@ -412,10 +360,8 @@ Phase 6 (Post-Deployment)
 | `deployment/s3_migration/migrate_s3.py` | Core migration with PATH_MAPPINGS |
 | `deployment/s3_migration/S3_README.md` | Detailed migration guide |
 | `deployment/scripts/load_catalog.py` | pgstac catalog loader |
-| `deployment/scripts/rewrite_asset_urls.py` | S3 -> proxy URL rewriter |
+| `deployment/scripts/rewrite_asset_urls.py` | S3 → proxy URL rewriter |
 | `deployment/scripts/test_asset_proxy.sh` | Proxy validation |
 | `deployment/scripts/reset_database.sh` | Database reset utility |
-| `deployment/scripts/Scripts_README.md` | Script documentation |
 | `deployment/asset-proxy/app.py` | FastAPI S3 streaming proxy |
-| `deployment/Deployment_Guide.txt` | Original deployment guide |
 | `deployment/Deployment_Strategy_Overview_OWP.md` | Architecture & cost analysis |
