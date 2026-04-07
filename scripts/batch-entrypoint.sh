@@ -35,5 +35,8 @@ fi
 if [ -n "$DATES" ]; then
     EXTRA_ARGS+=(--dates "$DATES")
 fi
+if [ -n "$KEEP_PARTIALS" ] && [ "$KEEP_PARTIALS" != "0" ]; then
+    EXTRA_ARGS+=(--keep-partials)
+fi
 
 exec python3 -m "$@" "${EXTRA_ARGS[@]}"

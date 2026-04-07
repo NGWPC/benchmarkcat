@@ -660,7 +660,8 @@ def _process_one_scene(
 
 def main_batch_worker(args):
     """Batch-worker entry point: process one manifest slice, flush item JSONs, write partial parquet."""
-    from ingest.batch_utils import read_manifest, upload_partial_parquet
+    import pandas as pd
+    from ingest.batch_utils import load_partial_parquets, read_manifest, upload_partial_parquet
 
     if not args.manifest_s3_key:
         raise ValueError("--manifest-s3-key is required in batch-worker mode")
@@ -690,6 +691,15 @@ def main_batch_worker(args):
                  job_index, len(my_scenes), start, start + len(my_scenes) - 1)
 
     asset_handler = GFMExpAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
+    partial_df = load_partial_parquets(s3_utils, args.bucket_name, args.partial_parquet_prefix)
+    if not partial_df.empty:
+        asset_handler.results_df = pd.concat(
+            [asset_handler.results_df, partial_df], ignore_index=True
+        ).drop_duplicates(subset=["sent_ti_path"], keep="last").reset_index(drop=True)
+        logging.info("Batch worker %d: merged %d rows from existing partials into results_df",
+                     job_index, len(partial_df))
+
+    # Upload full slice for this job so changing scenes_per_job between runs does not lose data when overwriting same job index.
     catalog_id = "gfm-expanded-collection"
     collection = create_gfm_exp_collection(
         args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
@@ -709,11 +719,23 @@ def main_batch_worker(args):
 
         work_items = [(s["date_path"], s["date_id"], s["sent_ti_path"]) for s in my_scenes]
 
+        skipped_count = 0
         if args.workers <= 1:
             for scene in my_scenes:
                 date_id = scene["date_id"]
                 sent_ti_path = scene["sent_ti_path"]
                 try:
+                    if scene_already_uploaded(
+                        sent_ti_path,
+                        asset_handler.results_df,
+                        s3_utils,
+                        args.bucket_name,
+                        args.catalog_path,
+                        catalog_id,
+                    ):
+                        logging.info("Skipping already-uploaded scene: %s", sent_ti_path)
+                        skipped_count += 1
+                        continue
                     item, asset_results = process_tile(
                         sent_ti_path,
                         date_id,
@@ -732,6 +754,21 @@ def main_batch_worker(args):
                 except Exception as e:
                     logging.warning("Scene %s failed: %s", sent_ti_path, e)
         else:
+            work_items_to_process = []
+            for date_path, date_id, sent_ti_path in work_items:
+                if scene_already_uploaded(
+                    sent_ti_path,
+                    asset_handler.results_df,
+                    s3_utils,
+                    args.bucket_name,
+                    args.catalog_path,
+                    catalog_id,
+                ):
+                    skipped_count += 1
+                else:
+                    work_items_to_process.append((date_path, date_id, sent_ti_path))
+            work_items = work_items_to_process
+
             worker = partial(
                 _process_one_scene,
                 profile=args.profile,
@@ -754,15 +791,25 @@ def main_batch_worker(args):
                     except Exception as e:
                         logging.warning("Worker result failed: %s", e)
 
+    if skipped_count > 0:
+        logging.info(
+            "Batch worker %d: skipped %d already-uploaded scenes out of %d total",
+            job_index, skipped_count, len(my_scenes),
+        )
+
     flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
 
-    if not asset_handler.results_df.empty:
+    my_sent_ti_paths = {s["sent_ti_path"] for s in my_scenes}
+    upload_df = asset_handler.results_df[
+        asset_handler.results_df["sent_ti_path"].isin(my_sent_ti_paths)
+    ]
+    if not upload_df.empty:
         upload_partial_parquet(
             s3_utils,
             args.bucket_name,
             args.partial_parquet_prefix,
             job_index,
-            asset_handler.results_df,
+            upload_df,
         )
 
     logging.info("Batch worker %d done.", job_index)

@@ -185,6 +185,18 @@ docker run --rm \
 ```
 
 
+### Orchestration Container
+
+A separate lightweight container for running the Prefect pipeline orchestrator and Terraform. It does **not** include GDAL or geospatial libraries.
+
+```bash
+docker build -f Dockerfile.orchestration -t benchmarkcat:orchestration .
+docker run --rm \
+  -v "$HOME/.aws:/root/.aws" \
+  benchmarkcat:orchestration \
+  python3 scripts/run_pipeline_prefect.py --help
+```
+
 ### Batch pipeline (GFM and GFM Expanded)
 
 GFM and GFM expanded support a 3-phase batch workflow for scaling to many scenes. For local testing, run Phase 1, then Phase 2 (e.g. with `--job-index 0`), then Phase 3. All examples below use placeholder S3 paths under `benchmark/stac-bench-cat/` and `benchmark/rs/`; replace with your bucket and paths as needed.
@@ -192,6 +204,8 @@ GFM and GFM expanded support a 3-phase batch workflow for scaling to many scenes
 For AWS Batch deployment (Terraform, Docker build/push, and the `run_pipeline_prefect.py` Prefect orchestrator), see **[docs/aws-batch-pipeline.md](docs/aws-batch-pipeline.md)**.
 
 Date filters (`--after-date`, `--before-date`, `--dates`) are applied **only at Phase 1 (batch_split)**. Phase 2 workers process their slice of the manifest as-is and do not re-apply date filters; this avoids double filtering. When Phase 1 uses date filters, a **sidecar metadata file** is written at `<manifest_s3_key>.meta.json` with `total_scenes`, `manifest_s3_key`, `created_at`, and when applicable `after_date`, `before_date`, and/or `dates` so you can see what filters were used when the manifest was built.
+
+**Crash recovery & skip logic:** Phase 2 workers automatically skip scenes that were already fully processed (parquet row exists and item JSON is present on S3). On startup, each worker loads the master parquet *and* any existing partial parquets from previous runs, so scenes completed by sibling workers before a crash are recognized and not reprocessed. Only newly processed scenes are written to this worker's partial parquet.
 
 #### GFM batch
 
@@ -269,10 +283,10 @@ python3 -m ingest.gfm.batch_merge \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/gfm/ \
   --profile Data \
-  --skip-delete-partials
+  --keep-partials
 ```
 
-Add `--skip-delete-partials` to keep partial parquets for debugging.
+Add `--keep-partials` to preserve partial parquets for debugging.
 
 With Docker:
 
@@ -287,7 +301,7 @@ docker run --rm \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials \
+  --keep-partials \
   2>&1 | tee logs/gfm_col_run_merge.log
 ```
 
@@ -370,10 +384,10 @@ python3 -m ingest.gfm_exp.batch_merge \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials
+  --keep-partials
 ```
 
-Add `--skip-delete-partials` for debugging.
+Add `--keep-partials` to preserve partial parquets for debugging.
 
 With Docker:
 
@@ -388,7 +402,7 @@ docker run --rm \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials \
+  --keep-partials \
   2>&1 | tee logs/gfm_exp_col_run_merge.log
 ```
 

@@ -95,6 +95,12 @@ The script reads `aws_account_id`, `aws_region`, and `aws_profile` from terrafor
 
 Only needed when code changes (`ingest/`, `Dockerfile`, `scripts/batch-entrypoint.sh`). Changing S3 paths in `terraform.tfvars` does **not** require a rebuild.
 
+> **Note:** This builds and pushes the **job container** (`Dockerfile`) only. The orchestration container (`Dockerfile.orchestration`) runs locally and does not need to be pushed to ECR. Build it with:
+>
+> ```bash
+> docker build -f Dockerfile.orchestration -t benchmarkcat:orchestration .
+> ```
+
 ### 4. Submit the Pipeline
 
 **Optional:** start the Prefect UI first (in a separate terminal) to get live task-level observability:
@@ -194,6 +200,8 @@ python scripts/run_pipeline_prefect.py [options]
 | `--project-name`   | from terraform      | Project name for job definition naming              |
 | `--poll-interval`  | `30`                | Seconds between status polls                        |
 | `--dry-run`        | false               | Print what would be submitted without submitting    |
+| `--skip-split`     | false               | Skip Phase 1; use existing manifest on S3           |
+| `--keep-partials`  | false               | Merge: keep partial parquets after merging          |
 
 
 Date filters apply **only to Phase 1 (split)**. They are passed to the split job via container environment (not Batch parameters), so they can be omitted when not needed; the entrypoint converts them to CLI args when set. Workers process their manifest slice as-is; they do not re-apply date filters. A sidecar `<manifest>.meta.json` is written with `total_scenes` and any active filters for auditing.
@@ -224,21 +232,21 @@ All variables are declared in `terraform/variables.tf`. Required variables (no d
 All path variables are **required** — no defaults. Set them in `terraform/terraform.tfvars`.
 
 
-| Variable                        | Description                                                    |
-| ------------------------------- | -------------------------------------------------------------- |
-| `s3_bucket`                     | S3 bucket for all I/O                                          |
-| `scenes_per_job`                | Default scenes per worker; controls array size (default: `50`) |
-| `workers`                       | Default parallel workers per job (default: `1`)                |
-| `catalog_path`                  | Root catalog prefix                                            |
-| `hucs_object_key`               | S3 key for HUC8 boundaries GeoPackage                          |
-| `boundaries_object_key`         | S3 key for country boundaries GeoPackage                       |
-| `gfm_asset_object_key`          | GFM source data prefix                                         |
-| `gfm_manifest_s3_key`           | GFM manifest JSONL key                                         |
-| `gfm_partial_parquet_prefix`    | GFM partial parquets prefix                                    |
-| `gfm_derived_metadata_path`     | GFM master parquet key                                         |
-| `gfm_dfo_geopackage_object_key` | S3 key for DFO USA events GeoPackage (GFM worker; required)    |
+| Variable                        | Description                                                               |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `s3_bucket`                     | S3 bucket for all I/O                                                     |
+| `scenes_per_job`                | Default scenes per worker; controls array size (default: `50`)            |
+| `workers`                       | Default parallel workers per job (default: `1`)                           |
+| `catalog_path`                  | Root catalog prefix                                                       |
+| `hucs_object_key`               | S3 key for HUC8 boundaries GeoPackage                                     |
+| `boundaries_object_key`         | S3 key for country boundaries GeoPackage                                  |
+| `gfm_asset_object_key`          | GFM source data prefix                                                    |
+| `gfm_manifest_s3_key`           | GFM manifest JSONL key                                                    |
+| `gfm_partial_parquet_prefix`    | GFM partial parquets prefix                                               |
+| `gfm_derived_metadata_path`     | GFM master parquet key                                                    |
+| `gfm_dfo_geopackage_object_key` | S3 key for DFO USA events GeoPackage (GFM worker; required)               |
 | `gfm_readme_object_key`         | Full S3 key for GFM data readme PDF (required; shared by GFM and GFM_EXP) |
-| `gfm_exp_`*                     | GFM Expanded equivalents (same pattern)                        |
+| `gfm_exp`_*                     | GFM Expanded equivalents (same pattern)                                   |
 
 
 ---
@@ -258,3 +266,5 @@ aws s3 cp s3://<bucket>/<manifest_s3_key>.meta.json - | python3 -m json.tool
 It contains `total_scenes`, `created_at`, and any active date filters. If `total_scenes = 0`, the split found no matching scenes — check your date filters and S3 prefix.
 
 **Worker OOM (exit code 137)**: Increase `worker_memory` in `terraform.tfvars` and run `terraform apply`. Default is 16 GB; try 32768 for very large scenes.
+
+**Restarting after a crash (before merge)**: Workers automatically detect scenes already processed by loading the master parquet and any existing partial parquets at startup. Each scene is checked against the tracking parquet *and* verified via S3 `HeadObject` on its item JSON — only scenes passing both checks are skipped. Scenes from workers that crashed mid-processing are safely reprocessed. Use `--keep-partials` in the merge phase to preserve partials for post-mortem debugging.

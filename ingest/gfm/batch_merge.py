@@ -10,7 +10,7 @@ Usage:
         --derived_metadata_path benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet \
         --catalog_path benchmark/stac-bench-cat/ \
         [--profile my-profile]
-        [--skip-delete-partials]
+        [--keep-partials]
 """
 
 import logging
