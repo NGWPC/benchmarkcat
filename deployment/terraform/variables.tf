@@ -49,7 +49,7 @@ variable "ami_id" {
 variable "ubuntu_version" {
   description = "Ubuntu release version to use if ami_id is not provided."
   type        = string
-  default     = "jammy-22.04" # Options: "jammy-22.04" or "noble-24.04"
+  default     = "noble-24.04" # Options: "jammy-22.04" or "noble-24.04"
 }
 
 variable "architecture" {

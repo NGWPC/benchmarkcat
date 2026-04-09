@@ -123,7 +123,7 @@ aws --version
 
 # Install Python dependencies for catalog loading scripts
 echo "[$(date)] Installing Python dependencies..."
-pip3 install --no-cache-dir psycopg2-binary
+pip3 install --no-cache-dir --break-system-packages psycopg2-binary
 
 echo "[$(date)] System packages installed"
 
@@ -458,7 +458,7 @@ WORKDIR /app
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy application code
 COPY app.py .
