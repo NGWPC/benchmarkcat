@@ -257,7 +257,8 @@
                               "normalized_anomaly_ratio": {
                                 "type": "number",
                                 "minimum": 0,
-                                "description": "Ratio of flood area to total HUC area, normalized"
+                                "maximum": 1,
+                                "description": "Ratio of flood pixels to observed-water pixels"
                               }
                             }
                           }
@@ -280,15 +281,29 @@
                           "properties": {
                             "D_floor": {
                               "type": "object",
-                              "description": "Minimum criteria - below this is grade D"
+                              "description": "Minimum criteria - below this is grade D",
+                              "properties": {
+                                "observability_pct_lt": { "type": "number", "description": "Grade D if observability_pct is below this value" },
+                                "advisory_noise_pct_gt": { "type": "number", "description": "Grade D if advisory_noise_pct exceeds this value" }
+                              }
                             },
                             "A": {
                               "type": "object",
-                              "description": "Criteria for grade A (highest quality)"
+                              "description": "Criteria for grade A (highest quality)",
+                              "properties": {
+                                "uncertainty_mean_gt": { "type": "number", "description": "uncertainty_mean must exceed this value" },
+                                "observability_pct_gt": { "type": "number", "description": "observability_pct must exceed this value" },
+                                "advisory_noise_pct_lt": { "type": "number", "description": "advisory_noise_pct must be below this value" }
+                              }
                             },
                             "B": {
                               "type": "object",
-                              "description": "Criteria for grade B"
+                              "description": "Criteria for grade B",
+                              "properties": {
+                                "uncertainty_mean_gt": { "type": "number", "description": "uncertainty_mean must exceed this value" },
+                                "observability_pct_gt": { "type": "number", "description": "observability_pct must exceed this value" },
+                                "advisory_noise_pct_lt": { "type": "number", "description": "advisory_noise_pct must be below this value" }
+                              }
                             }
                           }
                         },
@@ -298,11 +313,19 @@
                           "properties": {
                             "High": {
                               "type": "object",
-                              "description": "Criteria for High impact"
+                              "description": "Criteria for High impact",
+                              "properties": {
+                                "affected_pop_gt": { "type": "number", "description": "affected_pop must exceed this value" },
+                                "flood_area_km2_gt": { "type": "number", "description": "flood_area_km2 must exceed this value" }
+                              }
                             },
                             "Medium": {
                               "type": "object",
-                              "description": "Criteria for Medium impact"
+                              "description": "Criteria for Medium impact",
+                              "properties": {
+                                "affected_pop_gt": { "type": "number", "description": "affected_pop must exceed this value" },
+                                "flood_area_km2_gt": { "type": "number", "description": "flood_area_km2 must exceed this value" }
+                              }
                             }
                           }
                         }
