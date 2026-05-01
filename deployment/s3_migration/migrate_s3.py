@@ -8,7 +8,7 @@ This script:
 4. Uploads updated catalog to destination stac/
 
 Target structure:
-    s3://owp-benchmark/
+    s3://<dest-bucket>/<dest-prefix>/
     ├── stac/                    # STAC metadata + parquet caches
     │   ├── catalog.json
     │   ├── collections/
@@ -29,7 +29,8 @@ Target structure:
 Usage:
     python migrate_s3.py \\
         --source-bucket fimc-data \\
-        --dest-bucket owp-benchmark \\
+        --dest-bucket hv-fim-dev-us-east-1-stac \\
+        --dest-prefix benchmark-stac \\
         --working-dir ~/benchmark-catalog \\
         --aws-profile your-profile \\
         --generate-copy-commands  # Creates shell script to copy assets
@@ -135,11 +136,18 @@ def _build_s3_sync_args(
     return args
 
 
+def _dest_path(dest_bucket: str, dest_prefix: str, *parts: str) -> str:
+    """Build a full S3 URI under s3://<dest_bucket>/<dest_prefix>/."""
+    key = "/".join([dest_prefix] + list(parts))
+    return f"s3://{dest_bucket}/{key}"
+
+
 def update_asset_href(
     old_href: str,
     source_bucket: str,
     dest_bucket: str,
-    collection_id: str
+    dest_prefix: str,
+    collection_id: str,
 ) -> Optional[str]:
     """
     Update asset HREF to new structure.
@@ -148,6 +156,7 @@ def update_asset_href(
         old_href: Original S3 URI or URL
         source_bucket: Source bucket name
         dest_bucket: Destination bucket name
+        dest_prefix: Destination prefix (e.g. benchmark-stac)
         collection_id: Collection ID for path mapping
 
     Returns:
@@ -159,7 +168,7 @@ def update_asset_href(
 
     mapping = PATH_MAPPINGS[collection_id]
     source_path = mapping['source']
-    dest_path = mapping['dest']
+    dest_path = f"{dest_prefix}/{mapping['dest']}"
 
     # Parse S3 URI
     if old_href.startswith('s3://'):
@@ -167,43 +176,28 @@ def update_asset_href(
         bucket = parsed.netloc
         key = parsed.path.lstrip('/')
 
-        # Only update if it's from the source bucket
         if bucket != source_bucket:
             return old_href
 
-        # Check if key starts with source path
         if not key.startswith(source_path):
-            # Try to find source path anywhere in key
             if source_path not in key:
                 logger.debug(f"Asset {key} does not match source path {source_path}")
                 return old_href
 
-            # Extract relative path after source path
             parts = key.split(source_path, 1)
-            if len(parts) > 1:
-                relative_path = parts[1].lstrip('/')
-            else:
-                relative_path = key
+            relative_path = parts[1].lstrip('/') if len(parts) > 1 else key
         else:
-            # Extract relative path
             relative_path = key[len(source_path):].lstrip('/')
 
-        # Build new S3 URI
         new_key = f"{dest_path}/{relative_path}" if relative_path else dest_path
-        new_href = f"s3://{dest_bucket}/{new_key}"
-
-        return new_href
+        return f"s3://{dest_bucket}/{new_key}"
 
     # Handle HTTP URLs
     elif 's3.amazonaws.com' in old_href or 's3-' in old_href:
         if source_bucket in old_href:
-            # Extract key from URL
             parts = old_href.split(source_bucket)
             if len(parts) > 1:
                 key = parts[-1].lstrip('/').split('?')[0]
-
-                # Try to match source path
-                source_path = mapping['source']
                 if source_path in key:
                     path_parts = key.split(source_path, 1)
                     relative_path = path_parts[1].lstrip('/')
@@ -219,7 +213,7 @@ def download_catalog(
     source_catalog_prefix: str,
     working_dir: Path,
     aws_profile: Optional[str],
-    dry_run: bool
+    dry_run: bool,
 ) -> int:
     """Download STAC catalog from S3."""
     logger.info("Phase 1: Downloading catalog from source S3...")
@@ -234,7 +228,6 @@ def download_catalog(
         ["--exclude", "*", "--include", "*.json"],
     )
 
-    # Download parquet caches (these go to stac/assets/derived-asset-data/)
     assets_extra = ["--exclude", "*"]
     for ext in SHARED_ASSET_EXTENSIONS:
         assets_extra += ["--include", ext]
@@ -273,7 +266,8 @@ def update_catalog_hrefs(
     working_dir: Path,
     source_bucket: str,
     dest_bucket: str,
-    dry_run: bool
+    dest_prefix: str,
+    dry_run: bool,
 ) -> None:
     """Update all HREFs in catalog to new structure."""
     logger.info("Phase 2: Updating HREFs in catalog...")
@@ -339,7 +333,8 @@ def update_catalog_hrefs(
                         old_href,
                         source_bucket,
                         dest_bucket,
-                        collection_id
+                        dest_prefix,
+                        collection_id,
                     )
 
                     if new_href != old_href:
@@ -373,13 +368,11 @@ def update_catalog_hrefs(
                     if href.startswith('s3://') and source_bucket in href:
                         # Update catalog/collection links
                         if 'catalog.json' in href or 'collection.json' in href:
-                            # These will be in stac/ directory
                             key = href.split(source_bucket)[-1].lstrip('/')
-                            # Remove old prefix and add stac/
                             if 'stac-bench-cat' in key:
-                                new_key = key.replace('benchmark/stac-bench-cat', 'stac')
+                                new_key = key.replace('benchmark/stac-bench-cat', f"{dest_prefix}/stac")
                             else:
-                                new_key = f"stac/{key}"
+                                new_key = f"{dest_prefix}/stac/{key}"
 
                             new_link_href = f"s3://{dest_bucket}/{new_key}"
                             if not dry_run:
@@ -432,6 +425,7 @@ def update_catalog_hrefs(
 def generate_copy_commands(
     source_bucket: str,
     dest_bucket: str,
+    dest_prefix: str,
     working_dir: Path,
     aws_profile: Optional[str],
     dry_run: bool = False,
@@ -446,7 +440,8 @@ def generate_copy_commands(
     if dry_run:
         logger.info(f"[DRY RUN] Would generate copy script at: {script_path}")
         for collection_id, mapping in PATH_MAPPINGS.items():
-            logger.info(f"  {collection_id}: {mapping['source']} -> {mapping['dest']}")
+            dest_path = f"{dest_prefix}/{mapping['dest']}"
+            logger.info(f"  {collection_id}: {mapping['source']} -> {dest_path}")
         return
 
     with open(script_path, 'w') as f:
@@ -460,7 +455,7 @@ def generate_copy_commands(
 
         for collection_id, mapping in PATH_MAPPINGS.items():
             source_path = mapping['source']
-            dest_path = mapping['dest']
+            dest_path = f"{dest_prefix}/{mapping['dest']}"
 
             f.write(f"# {collection_id}\n")
             f.write(f"echo 'Copying {collection_id}...'\n")
@@ -469,21 +464,20 @@ def generate_copy_commands(
                 f"s3://{dest_bucket}/{dest_path}/ {profile_flag}\n\n"
             )
 
-        # Shared ingestion assets -> top-level assets/ prefix
         f.write("# Shared ingestion assets\n")
         f.write("echo 'Copying shared ingestion assets...'\n")
         for entry in SHARED_INGESTION_ASSETS:
+            dest_asset = f"{dest_prefix}/{entry['dest']}"
             f.write(f"# {entry['description']}\n")
             f.write(
                 f"aws s3 cp s3://{source_bucket}/{entry['source']} "
-                f"s3://{dest_bucket}/{entry['dest']} {profile_flag}\n"
+                f"s3://{dest_bucket}/{dest_asset} {profile_flag}\n"
             )
         f.write("\n")
 
         f.write("echo ''\n")
         f.write("echo 'Asset migration complete!'\n")
 
-    # Make executable
     os.chmod(script_path, 0o755)
 
     logger.info(f"\nAsset copy commands saved to: {script_path}")
@@ -493,9 +487,10 @@ def generate_copy_commands(
 
 def upload_catalog(
     dest_bucket: str,
+    dest_prefix: str,
     working_dir: Path,
     aws_profile: Optional[str],
-    dry_run: bool
+    dry_run: bool,
 ) -> int:
     """Upload updated catalog to destination S3."""
     logger.info("Phase 4: Uploading updated catalog to destination S3...")
@@ -506,12 +501,13 @@ def upload_catalog(
         logger.error(f"Destination catalog not found at {dest_dir}")
         return 1
 
+    stac_uri = _dest_path(dest_bucket, dest_prefix, "stac") + "/"
     extra_args = ["--exclude", "*", "--include", "*.json"]
     for ext in SHARED_ASSET_EXTENSIONS:
         extra_args += ["--include", ext]
     cmd_args = _build_s3_sync_args(
         f"{dest_dir}/",
-        f"s3://{dest_bucket}/stac/",
+        stac_uri,
         aws_profile,
         extra_args,
     )
@@ -529,7 +525,7 @@ def upload_catalog(
 
     json_files = list(dest_dir.rglob('*.json'))
     parquet_files = list(dest_dir.rglob('*.parquet'))
-    logger.info(f"Uploaded {len(json_files)} JSON files and {len(parquet_files)} parquet caches to s3://{dest_bucket}/stac/")
+    logger.info(f"Uploaded {len(json_files)} JSON files and {len(parquet_files)} parquet caches to {stac_uri}")
 
     return 0
 
@@ -551,7 +547,12 @@ def main():
     parser.add_argument(
         '--dest-bucket',
         required=True,
-        help='Destination S3 bucket (e.g., owp-benchmark)'
+        help='Destination S3 bucket (e.g., hv-fim-dev-us-east-1-stac)'
+    )
+    parser.add_argument(
+        '--dest-prefix',
+        required=True,
+        help='Prefix under dest bucket (e.g., benchmark-stac). All content goes under <dest-bucket>/<dest-prefix>/'
     )
     parser.add_argument(
         '--working-dir',
@@ -605,8 +606,8 @@ def main():
     logger.info("S3 Migration with Restructuring")
     logger.info("="*60)
     logger.info(f"Source: s3://{args.source_bucket}/{args.source_catalog_prefix}/")
-    logger.info(f"Destination STAC: s3://{args.dest_bucket}/stac/")
-    logger.info(f"Destination Data: s3://{args.dest_bucket}/data/")
+    logger.info(f"Destination STAC: s3://{args.dest_bucket}/{args.dest_prefix}/stac/")
+    logger.info(f"Destination Data: s3://{args.dest_bucket}/{args.dest_prefix}/data/")
     logger.info(f"Working directory: {working_dir}")
     if args.dry_run:
         logger.info("MODE: DRY RUN")
@@ -616,7 +617,7 @@ def main():
     for collection_id, mapping in PATH_MAPPINGS.items():
         logger.info(f"  {collection_id}:")
         logger.info(f"    {args.source_bucket}/{mapping['source']}")
-        logger.info(f"    -> {args.dest_bucket}/{mapping['dest']}")
+        logger.info(f"    -> {args.dest_bucket}/{args.dest_prefix}/{mapping['dest']}")
     logger.info("")
 
     # Phase 1: Download catalog
@@ -639,7 +640,8 @@ def main():
             working_dir,
             args.source_bucket,
             args.dest_bucket,
-            args.dry_run
+            args.dest_prefix,
+            args.dry_run,
         )
     else:
         logger.info("Skipping HREF update (--skip-update)")
@@ -649,6 +651,7 @@ def main():
         generate_copy_commands(
             args.source_bucket,
             args.dest_bucket,
+            args.dest_prefix,
             working_dir,
             args.aws_profile,
             args.dry_run,
@@ -658,9 +661,10 @@ def main():
     if not args.skip_upload:
         result = upload_catalog(
             args.dest_bucket,
+            args.dest_prefix,
             working_dir,
             args.aws_profile,
-            args.dry_run
+            args.dry_run,
         )
         if result != 0:
             sys.exit(result)
@@ -674,9 +678,9 @@ def main():
     logger.info(f"1. Review updated catalog in: {working_dir}/dest_catalog/")
     logger.info(f"2. Run asset copy script: {working_dir}/copy_assets.sh")
     logger.info(f"3. Verify uploads:")
-    logger.info(f"   aws s3 ls s3://{args.dest_bucket}/stac/ --recursive | wc -l")
-    logger.info(f"   aws s3 ls s3://{args.dest_bucket}/assets/")
-    logger.info(f"   aws s3 ls s3://{args.dest_bucket}/data/ --recursive | wc -l")
+    logger.info(f"   aws s3 ls s3://{args.dest_bucket}/{args.dest_prefix}/stac/ --recursive | wc -l")
+    logger.info(f"   aws s3 ls s3://{args.dest_bucket}/{args.dest_prefix}/assets/")
+    logger.info(f"   aws s3 ls s3://{args.dest_bucket}/{args.dest_prefix}/data/ --recursive | wc -l")
 
 
 if __name__ == "__main__":

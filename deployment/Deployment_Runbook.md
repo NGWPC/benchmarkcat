@@ -24,7 +24,7 @@ BenchmarkCat is a STAC geospatial catalog (~23,800 items, 8 collections, ~1.5 TB
 
 ### 0.2 Cross-Account IAM Setup
 
-**OWP side** — create a temporary migration role:
+**OWP side** — create a temporary migration role **if necessary**:
 - Role name: `owp-benchmarkcat-migration-role` (EC2 trust policy)
 - Policy 1 (source read): `s3:GetObject` and `s3:ListBucket` on `s3://fimc-data/benchmark/*` and `s3://fimc-data/hand_fim/test_cases/*`
 - Policy 2 (dest write): `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on `s3://owp-benchmark/*`
