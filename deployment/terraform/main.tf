@@ -251,6 +251,7 @@ resource "aws_instance" "standalone_instance" {
         s3_read_paths         = join(",", var.s3_read_paths)
         s3_write_paths        = join(",", var.s3_write_paths)
         backup_s3_uri         = var.backup_s3_uri
+        stac_catalog_path     = var.stac_catalog_path
         api_image_version     = var.api_image_version
         browser_image_version = var.browser_image_version
         domain_name           = local.full_domain_name
@@ -323,6 +324,7 @@ resource "aws_launch_template" "app" {
         alb_target_port       = var.alb_target_port
         s3_read_paths         = join(",", var.s3_read_paths)
         s3_write_paths        = join(",", var.s3_write_paths)
+        stac_catalog_path     = var.stac_catalog_path
         api_image_version     = var.api_image_version
         browser_image_version = var.browser_image_version
         domain_name           = local.full_domain_name
@@ -725,6 +727,7 @@ resource "null_resource" "asg_refresh" {
         alb_target_port       = var.alb_target_port
         s3_read_paths         = join(",", var.s3_read_paths)
         s3_write_paths        = join(",", var.s3_write_paths)
+        stac_catalog_path     = var.stac_catalog_path
         api_image_version     = var.api_image_version
         browser_image_version = var.browser_image_version
       }

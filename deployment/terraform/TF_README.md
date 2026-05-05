@@ -46,9 +46,12 @@ browser_image_version = "3.3.4"
 
 # S3 Access Configuration
 # Define buckets the application should read from and where to store backups
-s3_read_paths  = ["your-data-bucket/*"]
-s3_write_paths = ["your-data-bucket/backups/*"]
-backup_s3_uri  = "s3://your-data-bucket/backups/stac-db/"
+s3_read_paths = [
+  "your-stac-bucket",   # e.g., hv-fim-dev-stac
+  "your-data-bucket",   # e.g., hv-fim-dev-data
+]
+s3_write_paths = ["your-data-bucket/your-data-prefix/backups/*"]
+backup_s3_uri  = "s3://your-data-bucket/your-data-prefix/backups/stac-db/"
 
 # Logging
 log_retention_days = 7
@@ -83,9 +86,9 @@ terraform {
 - `key_name`: (Optional) The name of an existing EC2 key pair. Required if you need SSH access to the instance.
 
 ### S3 Access and Backups
-- `s3_read_paths`: A list of S3 bucket paths or prefixes that the application needs to read from.
-- `s3_write_paths`: A list of S3 bucket paths or prefixes where the application requires write access.
-- `backup_s3_uri`: The specific S3 URI (e.g., s3://my-bucket/backups/) where database backups will be stored.
+- `s3_read_paths`: List of S3 buckets the application reads from. Expects two buckets: the STAC metadata bucket (e.g., `hv-fim-dev-stac`) and the data bucket (e.g., `hv-fim-dev-data`).
+- `s3_write_paths`: Bucket path where the application has write access. Scoped to the backups prefix within the data prefix on the data bucket (e.g., `your-data-bucket/your-data-prefix/backups/*`).
+- `backup_s3_uri`: Full S3 URI for pgSTAC database backups. Nested under the data prefix in the data bucket (e.g., `s3://your-data-bucket/your-data-prefix/backups/stac-db/`). Leave empty for Enterprise mode (external RDS manages its own backups).
 
 ### Deployment Mode
 - `enterprise_mode`: Set to `false` for a standalone single-instance deployment or `true` for a load-balanced, auto-scaling deployment.

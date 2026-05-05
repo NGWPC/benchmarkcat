@@ -8,7 +8,7 @@ BenchmarkCat is a STAC geospatial catalog (~23,800 items, 8 collections, ~1.5 TB
 |-----------|---------|
 | EC2 Instance | t3.xlarge (4 vCPU, 16 GB RAM) |
 | Services | PostgreSQL (5432), STAC API (8082), STAC Browser (8080), asset-proxy (8083) |
-| Storage | S3 bucket (`owp-benchmark`) with `stac/`, `data/`, `docs/` directories |
+| Storage | `hv-fim-dev-stac` (STAC catalog) and `hv-fim-dev-data` (assets) |
 | Bootstrap | Automated via `deployment/terraform/templates/user_data_standalone.sh.tpl` or manually via `deployment/terraform/user-data/owp-bootstrap.sh` |
 
 ---
@@ -27,7 +27,7 @@ BenchmarkCat is a STAC geospatial catalog (~23,800 items, 8 collections, ~1.5 TB
 **OWP side** — create a temporary migration role **if necessary**:
 - Role name: `owp-benchmarkcat-migration-role` (EC2 trust policy)
 - Policy 1 (source read): `s3:GetObject` and `s3:ListBucket` on `s3://fimc-data/benchmark/*` and `s3://fimc-data/hand_fim/test_cases/*`
-- Policy 2 (dest write): `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on `s3://owp-benchmark/*`
+- Policy 2 (dest write): `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on `s3://hv-fim-dev-stac/*` and `s3://hv-fim-dev-data/*`
 
 **NGWPC side** — update `fimc-data` bucket policy to grant cross-account read access **if necessary**.
 
@@ -38,9 +38,10 @@ aws s3 ls s3://fimc-data/benchmark/ | head -5
 aws s3 ls s3://fimc-data/benchmark/stac-bench-cat/ | head -5
 ```
 
-### 0.4 Create Destination Bucket (can be different, i.e. `benchmark-catalog`)
+### 0.4 Create Destination Buckets
 ```bash
-aws s3 mb s3://owp-benchmark --region us-east-1
+aws s3 mb s3://hv-fim-dev-stac --region us-east-1
+aws s3 mb s3://hv-fim-dev-data --region us-east-1
 ```
 
 **Gate:** Do not proceed until cross-account S3 read is confirmed.
@@ -65,9 +66,10 @@ subnet_name_pattern  = "<SUBNET_PATTERN>*"
 instance_type        = "t3.xlarge"
 root_volume_size     = 100
 enterprise_mode      = false
-s3_read_paths        = ["owp-benchmark/*"]
-s3_write_paths       = ["owp-benchmark/backups/*"]
-backup_s3_uri        = "s3://owp-benchmark/backups/stac-db/"
+s3_read_paths        = ["hv-fim-dev-stac", "hv-fim-dev-data"]
+s3_write_paths       = ["hv-fim-dev-stac/benchmark-stac/*", "hv-fim-dev-data/benchmark/*"]
+backup_s3_uri        = "s3://hv-fim-dev-data/benchmark/backups/stac-db/"
+stac_catalog_path    = "benchmark-stac/"
 log_retention_days   = 7
 # key_name = "your-aws-key-pair-name"  # Optional: required for SSH access
 ```
@@ -130,35 +132,40 @@ cd /opt/benchmarkcat/repo/deployment/s3_migration
 
 python3 migrate_s3.py \
   --source-bucket fimc-data \
-  --dest-bucket owp-benchmark \
+  --stac-bucket hv-fim-dev-stac \
+  --stac-prefix benchmark-stac \
+  --data-bucket hv-fim-dev-data \
+  --data-prefix benchmark \
   --dry-run --verbose
 ```
 
 Verify all 8 path mappings are displayed (`PATH_MAPPINGS` in `migrate_s3.py`):
 
-| Collection | Source | Destination |
+| Collection | Source | Destination (under `hv-fim-dev-data/benchmark/`) |
 |---|---|---|
-| ble-collection | `benchmark/high_resolution_validation_data_ble` | `data/ble-collection` |
-| ripple-fim-collection | `benchmark/ripple_fim_100` | `data/ripple-fim-collection` |
-| hwm-collection | `benchmark/high_water_marks/usgs` | `data/hwm-collection` |
-| nws-fim-collection | `hand_fim/test_cases/nws_test_cases/validation_data_nws` | `data/nws-fim-collection` |
-| usgs-fim-collection | `hand_fim/test_cases/usgs_test_cases/validation_data_usgs` | `data/usgs-fim-collection` |
-| gfm-collection | `benchmark/rs/gfm` | `data/gfm-collection` |
-| iceye-collection | `benchmark/rs/iceye` | `data/iceye-collection` |
-| gfm-expanded-collection | `benchmark/rs/PI4` | `data/gfm-expanded-collection` |
-| STAC catalog | `benchmark/stac-bench-cat` | `stac/` |
+| ble-collection | `benchmark/high_resolution_validation_data_ble` | `ble-collection/` |
+| ripple-fim-collection | `benchmark/ripple_fim_100` | `ripple-fim-collection/` |
+| hwm-collection | `benchmark/high_water_marks/usgs` | `hwm-collection/` |
+| nws-fim-collection | `hand_fim/test_cases/nws_test_cases/validation_data_nws` | `nws-fim-collection/` |
+| usgs-fim-collection | `hand_fim/test_cases/usgs_test_cases/validation_data_usgs` | `usgs-fim-collection/` |
+| gfm-collection | `benchmark/rs/gfm` | `gfm-collection/` |
+| iceye-collection | `benchmark/rs/iceye` | `iceye-collection/` |
+| gfm-expanded-collection | `benchmark/rs/PI4` | `gfm-expanded-collection/` |
+| STAC catalog | `benchmark/stac-bench-cat` | `hv-fim-dev-stac/benchmark-stac/` |
 
 ### 2.2 Execute Migration
 
 ```bash
 # Download catalog + update HREFs + generate copy script
 python3 migrate_s3.py \
-  --source-bucket fimc-data --dest-bucket owp-benchmark \
+  --source-bucket fimc-data \
+  --stac-bucket hv-fim-dev-stac --stac-prefix benchmark-stac \
+  --data-bucket hv-fim-dev-data --data-prefix benchmark \
   --generate-copy-commands --skip-upload
 
 # Review sample HREF
 cat ~/benchmark-catalog/dest_catalog/gfm-collection/items/*/item.json | jq '.assets[].href' | head -5
-# Expected: s3://owp-benchmark/data/gfm-collection/...
+# Expected: s3://hv-fim-dev-data/benchmark/gfm-collection/...
 
 # Review migration manifest
 jq 'length' ~/benchmark-catalog/migration_manifest.json
@@ -167,11 +174,13 @@ jq 'length' ~/benchmark-catalog/migration_manifest.json
 ~/benchmark-catalog/copy_assets.sh
 
 # Monitor in another terminal:
-watch -n 30 'aws s3 ls s3://owp-benchmark/data/ --recursive | wc -l'
+watch -n 30 'aws s3 ls s3://hv-fim-dev-data/benchmark/ --recursive | wc -l'
 
 # Upload updated catalog
 python3 migrate_s3.py \
-  --source-bucket fimc-data --dest-bucket owp-benchmark \
+  --source-bucket fimc-data \
+  --stac-bucket hv-fim-dev-stac --stac-prefix benchmark-stac \
+  --data-bucket hv-fim-dev-data --data-prefix benchmark \
   --skip-download --skip-update
 ```
 
@@ -179,33 +188,37 @@ python3 migrate_s3.py \
 
 ### 2.3 Verify Migration
 ```bash
-aws s3 ls s3://owp-benchmark/stac/ --recursive | wc -l    # ~22,000
-aws s3 ls s3://owp-benchmark/data/ --recursive | wc -l
-aws s3 cp s3://owp-benchmark/stac/catalog.json - | jq '.'
-aws s3 ls s3://owp-benchmark/data/                          # 8 collection dirs
+aws s3 ls s3://hv-fim-dev-stac/benchmark-stac/ --recursive | wc -l    # ~22,000
+aws s3 ls s3://hv-fim-dev-data/benchmark/ --recursive | wc -l
+aws s3 cp s3://hv-fim-dev-stac/benchmark-stac/catalog.json - | jq '.'
+aws s3 ls s3://hv-fim-dev-data/benchmark/                              # 8 collection dirs + shared-assets/
 ```
 
 ### 2.4 Enable S3 Versioning
 
 ```bash
 aws s3api put-bucket-versioning \
-  --bucket owp-benchmark \
+  --bucket hv-fim-dev-stac \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-bucket-versioning \
+  --bucket hv-fim-dev-data \
   --versioning-configuration Status=Enabled
 ```
 
-### 2.5 Enable Intelligent-Tiering on data/
+### 2.5 Enable Intelligent-Tiering on data bucket
 
-Applies only to `data/` — `stac/` catalog files stay in STANDARD to avoid retrieval latency.
+Applies only to `hv-fim-dev-data` — the STAC catalog in `hv-fim-dev-stac` stays in STANDARD to avoid retrieval latency.
 
 ```bash
 aws s3api put-bucket-intelligent-tiering-configuration \
-  --bucket owp-benchmark \
+  --bucket hv-fim-dev-data \
   --id data-tiering \
   --intelligent-tiering-configuration '{
     "Id": "data-tiering",
     "Status": "Enabled",
-    "Filter": {"Prefix": "data/"},
-    # If desired, add/modify Tierings. 
+    "Filter": {"Prefix": "benchmark/"},
+    # If desired, add/modify Tierings.
     # "Tierings": [
     #   {"Days": 90,  "AccessTier": "ARCHIVE_ACCESS"},
     #   {"Days": 180, "AccessTier": "DEEP_ARCHIVE_ACCESS"}
@@ -221,7 +234,7 @@ Script: `deployment/scripts/load_catalog.py`
 
 ### 3.1 Sync Catalog Locally
 ```bash
-aws s3 sync s3://owp-benchmark/stac/ ~/stac-catalog/ --exclude "*" --include "*.json"
+aws s3 sync s3://hv-fim-dev-stac/benchmark-stac/ ~/stac-catalog/ --exclude "*" --include "*.json"
 ```
 
 ### 3.2 Load to pgstac
@@ -278,7 +291,7 @@ python3 /opt/benchmarkcat/repo/deployment/scripts/rewrite_asset_urls.py \
   --db-host localhost --db-password $PGPASSWORD
 ```
 
-Transforms: `s3://owp-benchmark/data/...` → `http://<HOST_IP>:8083/s3/owp-benchmark/data/...`
+Transforms: `s3://hv-fim-dev-data/benchmark/...` → `http://<HOST_IP>:8083/s3/hv-fim-dev-data/benchmark/...`
 
 **Note:** Use private VPC IP for internal access, or domain name if DNS is configured for external users.
 
@@ -286,7 +299,7 @@ Transforms: `s3://owp-benchmark/data/...` → `http://<HOST_IP>:8083/s3/owp-benc
 ```bash
 curl -s "http://${HOST_IP}:8082/collections/gfm-collection/items?limit=1" | \
   jq '.features[0].assets[].href'
-# All should show http://<HOST_IP>:8083/s3/owp-benchmark/data/...
+# All should show http://<HOST_IP>:8083/s3/hv-fim-dev-data/benchmark/...
 ```
 
 ---
@@ -295,9 +308,10 @@ curl -s "http://${HOST_IP}:8082/collections/gfm-collection/items?limit=1" | \
 
 ### 5.1 Update .env (if needed)
 
-The `.env` file is generated during bootstrap at `/opt/benchmarkcat/deployment/.env`. If `S3_BUCKET` is empty:
+The `.env` file is generated during bootstrap at `/opt/benchmarkcat/deployment/.env`. If `S3_BUCKET` or `S3_CATALOG_PATH` are incorrect:
 ```bash
-sed -i 's/^S3_BUCKET=.*/S3_BUCKET=owp-benchmark/' /opt/benchmarkcat/deployment/.env
+sed -i 's/^S3_BUCKET=.*/S3_BUCKET=hv-fim-dev-stac/' /opt/benchmarkcat/deployment/.env
+sed -i 's/^S3_CATALOG_PATH=.*/S3_CATALOG_PATH=benchmark-stac\//' /opt/benchmarkcat/deployment/.env
 sudo /opt/benchmarkcat/deployment/restart-services.sh
 ```
 

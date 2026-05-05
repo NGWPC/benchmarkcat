@@ -236,6 +236,12 @@ variable "backup_s3_uri" {
   default     = ""
 }
 
+variable "stac_catalog_path" {
+  description = "S3 key prefix where the STAC catalog lives within the STAC bucket (e.g., benchmark-stac/)"
+  type        = string
+  default     = "benchmark-stac/"
+}
+
 # ==========================================
 # Deployment Strategy Pattern
 # ==========================================

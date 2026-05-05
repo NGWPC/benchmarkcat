@@ -223,7 +223,7 @@ STAC_API_DESCRIPTION=Benchmark evaluation data catalog for NOAA OWP
 API_PORT=8082
 BROWSER_PORT=8080
 S3_BUCKET=$PRIMARY_S3_BUCKET
-S3_CATALOG_PATH="stac/"
+S3_CATALOG_PATH="${stac_catalog_path}"
 # Docker Image Versions
 PGSTAC_VERSION="v0.8.6"
 STAC_API_VERSION="latest"
@@ -916,7 +916,7 @@ Common SQL Queries:
 Automated Backups:
 ------------------
 Schedule:  Weekly (Sunday 2 AM)
-Location:  s3://owp-benchmark/backups/stac-db/
+Location:  $${BACKUP_S3_URI:-"None configured (local backups only)"}
 Local:     /opt/backups/postgres/ (last 7 days)
 
 Troubleshooting:

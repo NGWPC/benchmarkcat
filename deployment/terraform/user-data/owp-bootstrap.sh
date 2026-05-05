@@ -18,7 +18,7 @@ BACKUP_DIR="/opt/backups/postgres"
 
 # AWS Configuration
 AWS_REGION="us-east-1"
-BACKUP_S3_URI=""
+BACKUP_S3_URI="s3://hv-fim-dev-data/benchmark/backups/stac-db/"
 DOMAIN_NAME="localhost"
 
 # Database Configuration
@@ -228,7 +228,7 @@ STAC_API_DESCRIPTION=Benchmark evaluation data catalog for NOAA OWP
 API_PORT=8082
 BROWSER_PORT=8080
 S3_BUCKET=$PRIMARY_S3_BUCKET
-S3_CATALOG_PATH="stac/"
+S3_CATALOG_PATH="benchmark-stac/"
 # Docker Image Versions
 PGSTAC_VERSION="v0.8.6"
 STAC_API_VERSION="latest"
@@ -676,9 +676,9 @@ echo ""
 echo "--- S3 Access Test ---"
 if aws sts get-caller-identity &>/dev/null; then
     echo "AWS Credentials: OK"
-    TEST_BUCKET=""
-    if [ -n "\$TEST_BUCKET" ]; then
-        aws s3 ls s3://\$TEST_BUCKET/ &>/dev/null && echo "S3 Access: OK" || echo "S3 Access: FAILED"
+    TEST_BUCKET="hv-fim-dev-data"
+    if [ -n "$TEST_BUCKET" ]; then
+        aws s3 ls s3://$TEST_BUCKET/ &>/dev/null && echo "S3 Access: OK" || echo "S3 Access: FAILED"
     else
         echo "S3 Access: SKIPPED (No read buckets defined)"
     fi
@@ -930,7 +930,7 @@ Common SQL Queries:
 Automated Backups:
 ------------------
 Schedule:  Weekly (Sunday 2 AM)
-Location:  s3://owp-benchmark/backups/stac-db/
+Location:  ${BACKUP_S3_URI:-"None configured (local backups only)"}
 Local:     /opt/backups/postgres/ (last 7 days)
 
 Troubleshooting:

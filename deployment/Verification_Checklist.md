@@ -43,7 +43,7 @@ docker exec benchmarkcat-db psql -U pgstac -d stacdb -c "SELECT COUNT(*) FROM pg
 Compare DB item counts against S3 STAC catalog per collection:
 ```bash
 for col in ble-collection ripple-fim-collection hwm-collection nws-fim-collection usgs-fim-collection gfm-collection iceye-collection gfm-expanded-collection; do
-  s3_count=$(aws s3 ls s3://owp-benchmark/stac/$col/ --recursive | grep '\.json$' | grep -v 'collection.json' | wc -l)
+  s3_count=$(aws s3 ls s3://hv-fim-dev-stac/benchmark-stac/$col/ --recursive | grep '\.json$' | grep -v 'collection.json' | wc -l)
   db_count=$(docker exec benchmarkcat-db psql -U pgstac -d stacdb -t -A -c "SELECT COUNT(*) FROM pgstac.items WHERE collection='$col';")
   echo "$col: S3=$s3_count DB=$db_count $([ "$s3_count" -eq "$db_count" ] && echo 'OK' || echo 'MISMATCH')"
 done
@@ -60,7 +60,7 @@ Run `deployment/scripts/test_asset_proxy.sh` which covers:
 - [ ] Asset-proxy health endpoint (`http://<DOMAIN_NAME or HOST_IP>:8083/health`)
 - [ ] IAM instance profile / AWS credentials are valid (STS caller identity)
 - [ ] Sample assets queryable from database
-- [ ] Direct S3 access works via IAM role (`aws s3 ls s3://owp-benchmark/data/`)
+- [ ] Direct S3 access works via IAM role (`aws s3 ls s3://hv-fim-dev-data/benchmark/`)
 - [ ] Proxy URL serves assets with correct Content-Type
 
 ---
@@ -93,7 +93,7 @@ gdalinfo /vsicurl/$SAMPLE_URL
 
 GDAL read via S3 directly (from a workstation with GDAL and AWS credentials):
 ```bash
-gdalinfo /vsis3/owp-benchmark/data/gfm-collection/<item-id>/<asset-filename>.tif
+gdalinfo /vsis3/hv-fim-dev-data/benchmark/gfm-collection/<item-id>/<asset-filename>.tif
 # Expect: same raster metadata as above
 ```
 
@@ -201,7 +201,7 @@ ls -lh /opt/backups/postgres/ | tail -1
 
 S3 backup upload (if configured):
 ```bash
-aws s3 ls s3://owp-benchmark/backups/stac-db/
+aws s3 ls s3://hv-fim-dev-data/benchmark/backups/stac-db/
 # Expect: backup files listed with recent timestamps
 ```
 
@@ -256,7 +256,7 @@ nslookup $DOMAIN
 
 **Migration**
 - [ ] S3 migration completed (~1.5 TB transferred)
-- [ ] Catalog structure verified (`stac/` and `data/` directories)
+- [ ] Catalog structure verified (`hv-fim-dev-stac/benchmark-stac/` and `hv-fim-dev-data/benchmark/`)
 - [ ] Asset HREFs updated to new S3 bucket
 
 **Application**
