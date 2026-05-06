@@ -13,7 +13,7 @@ Target structure:
         ├── catalog.json
         └── <collection-id>/
             ├── collection.json
-            └── items/<item-id>/<item-id>.json
+            └── <item-id>/<item-id>.json
 
     s3://hv-fim-dev-data/
     └── benchmark/
