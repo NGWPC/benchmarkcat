@@ -7,23 +7,38 @@ Migrates STAC catalog and assets from NGWPC S3 (`fimc-data`) to two dedicated OW
 **Destination Structure:**
 ```
 s3://hv-fim-dev-stac/
-└── benchmark-stac/
-    ├── catalog.json
-    └── <collection-id>/
-        ├── collection.json
-        └── <item-id>/<item-id>.json
+└── benchmark-stac/                          # STAC metadata (~22,800 files, ~200 MB)
+    ├── catalog.json                         # Root catalog
+    ├── ble-collection/
+    │   ├── collection.json
+    │   └── <item-id>/<item-id>.json
+    ├── gfm-collection/
+    ├── gfm-expanded-collection/
+    ├── hwm-collection/
+    ├── iceye-collection/
+    ├── nws-fim-collection/
+    ├── ripple-fim-collection/
+    └── usgs-fim-collection/
 
-s3://hv-fim-dev-data/
+s3://hv-fim-dev-data/                        # Geospatial assets (1.5 TB)
 └── benchmark/
-    ├── shared-assets/          # GPKGs, PDFs, parquet caches
+    ├── shared-assets/                       # GPKGs, PDFs, parquet caches
+    │   ├── WBDHU8_webproj.gpkg              # Shared HUC8 boundaries
+    │   ├── gfm_data_readme.pdf
+    │   └── *.parquet                        # Derived-asset parquet caches
+    ├── backups/                             # PostgreSQL dumps
     ├── ble-collection/<item-id>/
     ├── gfm-collection/<item-id>/
+    │   └── S1A_IW_GRDH_[...]/
+    │       ├── *_ENSEMBLE_FLOOD_*.tif
+    │       ├── *_ENSEMBLE_UNCERTAINTY_*.tif
+    │       └── *_ADVFLAG_*.tif
     ├── gfm-expanded-collection/<item-id>/
-    ├── iceye-collection/<item-id>/
     ├── hwm-collection/<item-id>/
+    ├── iceye-collection/<item-id>/          # ICEYE_FSD-[...] scenes
     ├── nws-fim-collection/<item-id>/
-    ├── usgs-fim-collection/<item-id>/
-    └── ripple-fim-collection/<item-id>/
+    ├── ripple-fim-collection/<item-id>/
+    └── usgs-fim-collection/<item-id>/
 ```
 
 ## Path Mappings

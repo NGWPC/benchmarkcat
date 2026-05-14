@@ -59,8 +59,9 @@ Application Layer:
 - STAC Browser - Port 8080
 
 Storage Layer:
-- S3 Bucket (fimc-data): 1.5 TB of geospatial assets
-- STAC Catalog: 22,798 catalog files
+- Source S3 Bucket (`fimc-data`, NGWPC): 1.5 TB of geospatial assets, migrated to OWP
+- OWP STAC Bucket (`hv-fim-dev-stac`): ~22,800 catalog JSON files (~200 MB) under `benchmark-stac/`
+- OWP Data Bucket (`hv-fim-dev-data`): 1.5 TB of geospatial assets under `benchmark/`
 
 Access Layer:
 - OWP users: AWS SSO for S3, HTTP for STAC API
@@ -121,6 +122,8 @@ Access Layer:
 | S3 Standard-IA (90+ days) | $19 | 45% savings for infrequent access |
 | EFS Standard | $461 | 13x more expensive - NOT recommended |
 
+S3 cost covers both buckets combined; catalog metadata in `hv-fim-dev-stac` is ~200 MB and is rounding noise against the 1.5 TB of assets in `hv-fim-dev-data`.
+
 **Why S3:**
 - 93% cheaper than EFS ($35 vs $461/month)
 - 99.999999999% durability
@@ -129,50 +132,44 @@ Access Layer:
 - Lifecycle policies for automatic cost optimization
 - GDAL caching (1GB) provides good performance
 
-### **Proposed re-structuring of current S3 paths (example):**
+### **S3 Structure (2-bucket layout):**
+
+The OWP deployment splits the catalog metadata and the geospatial assets into two dedicated buckets. Items live directly under their collection prefix — there is no intermediate `items/` directory.
+
 ```
-  s3://owp-benchmark/
-  ├── stac/                                    # STAC metadata (~22,800 files, ~200MB)
-  │   ├── catalog.json                         # Root catalog
-  │   ├── collections/
-  │   │   ├── gfm-collection/
-  │   │   │   ├── collection.json
-  │   │   │   └── items/
-  │   │   │       ├── gfm-dfo-4336-20160307/
-  │   │   │       │   └── gfm-dfo-4336-20160307.json
-  │   │   │       └── ...
-  │   │   ├── gfm-expanded-collection/
-  │   │   ├── iceye-collection/
-  │   │   ├── ripple-fim-collection/
-  │   │   ├── ble-collection/
-  │   │   ├── hwm-collection/
-  │   │   └── usgs-fim-collection/
-  │   └── assets/
-  │       ├── WBDHU8_webproj.gpkg              # Shared HUC8 boundaries
-  │       └── derived-asset-data/              # Parquet caches
-  │           ├── gfm_collection.parquet
-  │           ├── gfm_expanded_collection.parquet
-  │           └── ...
-  │
-  ├── data/                                    # Geospatial assets (1.5 TB)
-  │   ├── gfm/                                 # GFM flood products
-  │   │   ├── dfo-4336/
-  │   │   │   └── S1A_IW_GRDH_[...]/
-  │   │   │       ├── *_ENSEMBLE_FLOOD_*.tif
-  │   │   │       ├── *_ENSEMBLE_UNCERTAINTY_*.tif
-  │   │   │       ├── *_ADVFLAG_*.tif
-  │   │   │       └── ...
-  │   │   └── ...
-  │   ├── iceye/                               # ICEYE satellite imagery
-  │   │   └── ICEYE_FSD-[...]/
-  │   ├── ble/                                 # BLE validation data
-  │   ├── ripple/                              # RIPPLE FIM
-  │   ├── hwm/                                 # High water marks
-  │   └── usgs/                                # USGS FIM
-  │
-  └── docs/                                    # Documentation
-      ├── gfm_data_readme.pdf
-      └── collection_metadata/
+  s3://hv-fim-dev-stac/
+  └── benchmark-stac/                          # STAC metadata (~22,800 files, ~200 MB)
+      ├── catalog.json                         # Root catalog
+      ├── ble-collection/
+      │   ├── collection.json
+      │   └── <item-id>/<item-id>.json
+      ├── gfm-collection/
+      ├── gfm-expanded-collection/
+      ├── hwm-collection/
+      ├── iceye-collection/
+      ├── nws-fim-collection/
+      ├── ripple-fim-collection/
+      └── usgs-fim-collection/
+
+  s3://hv-fim-dev-data/                        # Geospatial assets (1.5 TB)
+  └── benchmark/
+      ├── shared-assets/                       # GPKGs, PDFs, parquet caches
+      │   ├── WBDHU8_webproj.gpkg              # Shared HUC8 boundaries
+      │   ├── gfm_data_readme.pdf
+      │   └── *.parquet                        # Derived-asset parquet caches
+      ├── backups/                             # PostgreSQL dumps
+      ├── ble-collection/<item-id>/
+      ├── gfm-collection/<item-id>/
+      │   └── S1A_IW_GRDH_[...]/
+      │       ├── *_ENSEMBLE_FLOOD_*.tif
+      │       ├── *_ENSEMBLE_UNCERTAINTY_*.tif
+      │       └── *_ADVFLAG_*.tif
+      ├── gfm-expanded-collection/<item-id>/
+      ├── hwm-collection/<item-id>/
+      ├── iceye-collection/<item-id>/          # ICEYE_FSD-[...] scenes
+      ├── nws-fim-collection/<item-id>/
+      ├── ripple-fim-collection/<item-id>/
+      └── usgs-fim-collection/<item-id>/
 ```
 ---
 
