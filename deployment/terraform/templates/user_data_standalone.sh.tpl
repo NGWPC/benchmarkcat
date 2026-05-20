@@ -549,6 +549,8 @@ services:
       - CPL_VSIL_CURL_USE_HEAD=$${CPL_VSIL_CURL_USE_HEAD}
       - S3_BUCKET=$${S3_BUCKET}
       - S3_CATALOG_PATH=$${S3_CATALOG_PATH}
+      - STAC_FASTAPI_TITLE=Benchmark STAC
+      - STAC_FASTAPI_DESCRIPTION=Benchmark flood inundation model catalog
     ports:
       - "8082:8082"
     depends_on:
