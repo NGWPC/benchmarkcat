@@ -65,17 +65,25 @@ def parse_s3_url(url: str) -> tuple[str | None, str | None]:
         return bucket, key
 
     # Handle https://bucket.s3.amazonaws.com/key or https://s3.amazonaws.com/bucket/key
-    if 's3.amazonaws.com' in url or 's3-' in url:
-        parsed = urlparse(url)
-
-        # Format: https://bucket.s3.amazonaws.com/key or https://bucket.s3.region.amazonaws.com/key
-        if parsed.netloc.endswith('.s3.amazonaws.com') or '.s3-' in parsed.netloc or '.s3.' in parsed.netloc:
-            bucket = parsed.netloc.split('.')[0]
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    if parsed.scheme in ('http', 'https') and host:
+        # Format: https://bucket.s3.amazonaws.com/key
+        #         https://bucket.s3.region.amazonaws.com/key
+        #         https://bucket.s3-region.amazonaws.com/key
+        if (
+            host.endswith('.s3.amazonaws.com')
+            or '.s3.' in host
+            or '.s3-' in host
+        ) and not (host.startswith('s3.') or host.startswith('s3-')):
+            bucket = host.split('.', 1)[0]
             key = parsed.path.lstrip('/')
             return bucket, key
 
-        # Format: https://s3.amazonaws.com/bucket/key or https://s3.region.amazonaws.com/bucket/key
-        if parsed.netloc.startswith('s3.') or parsed.netloc.startswith('s3-'):
+        # Format: https://s3.amazonaws.com/bucket/key
+        #         https://s3.region.amazonaws.com/bucket/key
+        #         https://s3-region.amazonaws.com/bucket/key
+        if host == 's3.amazonaws.com' or host.startswith('s3.') or host.startswith('s3-'):
             parts = parsed.path.lstrip('/').split('/', 1)
             if len(parts) == 2:
                 bucket, key = parts
