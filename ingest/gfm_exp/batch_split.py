@@ -58,7 +58,7 @@ def discover_gfm_exp_scenes(s3_utils, bucket_name, asset_object_key, after_date,
 def main():
     run_batch_split(
         description="gfm_exp",
-        default_asset_object_key="benchmark/rs/PI4/",
+        default_asset_object_key=None,
         discover_scenes=discover_gfm_exp_scenes,
     )
 

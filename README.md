@@ -31,18 +31,31 @@ benchmarkcat/
 │   └── ripple/               # Ripple collection ingestion
 ├── schemas/                   # JSON Schema definitions
 │   ├── ble/v1.0.0/
-│   ├── iceye/v1.0.0/         # ICEYE schemas
+│   ├── iceye/v1.0.0/
 │   ├── gfm/v1.0.0/
 │   └── common_item_metadata/
 ├── scripts/                   # Utility scripts
+│   ├── run_pipeline_prefect.py  # Prefect orchestrator for AWS Batch pipeline
+│   ├── build_and_push.sh     # Build & push Docker image to ECR
+│   ├── batch-entrypoint.sh   # Container entrypoint for batch jobs
 │   ├── stac_processor.py     # STAC catalog processing
-│   ├── normalize_cat.py      # Catalog normalization
-│   └── update_asset_links.py # Asset link updates
-├── Dockerfile                 # Container image for ingest
+│   └── normalize_cat.py      # Catalog normalization
+├── terraform/                 # AWS Batch pipeline infrastructure (ECR, compute env, job queue)
+│                              # See docs/aws-batch-pipeline.md for usage
+├── deployment/                # OWP production deployment — STAC API server, asset proxy, and S3 migration
+│   ├── terraform/            # Terraform stack for the STAC API EC2/RDS environment (separate from root terraform/)
+│   ├── asset-proxy/          # Nginx/Python proxy for serving S3 assets over HTTP
+│   ├── s3_migration/         # Scripts to migrate the static S3 catalog to the API
+│   └── scripts/              # Bootstrap and operational scripts for the deployed server
+├── docs/                      # Additional documentation
+│   └── aws-batch-pipeline.md # AWS Batch pipeline setup and reference
+├── Dockerfile                 # Container image for ingest jobs
+├── Dockerfile.orchestration   # Lightweight container for Prefect orchestrator + Terraform
 ├── setup.py                   # Package setup
 └── requirements.txt           # Python dependencies
-
 ```
+
+> **Two Terraform stacks:** `terraform/` at the repo root manages AWS Batch infrastructure (ECR, compute environment, job queue, job definitions) used for scaling GFM/GFM-exp ingestion. `deployment/terraform/` is a separate stack that provisions the OWP production STAC API environment (EC2, RDS, networking). They are independent and must be applied separately.
 
 ## Installation
 
@@ -182,11 +195,27 @@ docker run --rm \
 ```
 
 
+### Orchestration Container
+
+A separate lightweight container for running the Prefect pipeline orchestrator and Terraform. It does **not** include GDAL or geospatial libraries.
+
+```bash
+docker build -f Dockerfile.orchestration -t benchmarkcat:orchestration .
+docker run --rm \
+  -v "$HOME/.aws:/root/.aws" \
+  benchmarkcat:orchestration \
+  python3 scripts/run_pipeline_prefect.py --help
+```
+
 ### Batch pipeline (GFM and GFM Expanded)
 
 GFM and GFM expanded support a 3-phase batch workflow for scaling to many scenes. For local testing, run Phase 1, then Phase 2 (e.g. with `--job-index 0`), then Phase 3. All examples below use placeholder S3 paths under `benchmark/stac-bench-cat/` and `benchmark/rs/`; replace with your bucket and paths as needed.
 
+For AWS Batch deployment (Terraform, Docker build/push, and the `run_pipeline_prefect.py` Prefect orchestrator), see **[docs/aws-batch-pipeline.md](docs/aws-batch-pipeline.md)**.
+
 Date filters (`--after-date`, `--before-date`, `--dates`) are applied **only at Phase 1 (batch_split)**. Phase 2 workers process their slice of the manifest as-is and do not re-apply date filters; this avoids double filtering. When Phase 1 uses date filters, a **sidecar metadata file** is written at `<manifest_s3_key>.meta.json` with `total_scenes`, `manifest_s3_key`, `created_at`, and when applicable `after_date`, `before_date`, and/or `dates` so you can see what filters were used when the manifest was built.
+
+**Crash recovery & skip logic:** Phase 2 workers automatically skip scenes that were already fully processed (parquet row exists and item JSON is present on S3). On startup, each worker loads the master parquet *and* any existing partial parquets from previous runs, so scenes completed by sibling workers before a crash are recognized and not reprocessed. Only newly processed scenes are written to this worker's partial parquet.
 
 #### GFM batch
 
@@ -264,10 +293,10 @@ python3 -m ingest.gfm.batch_merge \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/gfm/ \
   --profile Data \
-  --skip-delete-partials
+  --keep-partials
 ```
 
-Add `--skip-delete-partials` to keep partial parquets for debugging.
+Add `--keep-partials` to preserve partial parquets for debugging.
 
 With Docker:
 
@@ -277,12 +306,12 @@ docker run --rm \
   benchmarkcat \
   ingest.gfm_exp.batch_merge \
   --bucket_name fimc-data \
-  --partial-parquet-prefix scratch/biplov.bhandari/gfm-stac-test/stac/batch/gfm_exp_partials \
-  --derived_metadata_path scratch/biplov.bhandari/gfm-stac-test/stac/assets/derived-asset-data/gfm_expanded_collection.parquet \
-  --catalog_path scratch/biplov.bhandari/gfm-stac-test/stac/ \
-  --asset_object_key scratch/biplov.bhandari/gfm-stac-test/data-gfm-exp/ \
+  --partial-parquet-prefix benchmark/stac-bench-cat/batch/gfm_exp_partials \
+  --derived_metadata_path benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet \
+  --catalog_path benchmark/stac-bench-cat/ \
+  --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials \
+  --keep-partials \
   2>&1 | tee logs/gfm_col_run_merge.log
 ```
 
@@ -365,10 +394,10 @@ python3 -m ingest.gfm_exp.batch_merge \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials
+  --keep-partials
 ```
 
-Add `--skip-delete-partials` for debugging.
+Add `--keep-partials` to preserve partial parquets for debugging.
 
 With Docker:
 
@@ -383,7 +412,7 @@ docker run --rm \
   --catalog_path benchmark/stac-bench-cat/ \
   --asset_object_key benchmark/rs/PI4/ \
   --profile Data \
-  --skip-delete-partials \
+  --keep-partials \
   2>&1 | tee logs/gfm_exp_col_run_merge.log
 ```
 
@@ -408,7 +437,7 @@ GFM and GFM Expanded additionally support:
 - `--boundaries_object_key`: S3 key for Mexico/Canada boundaries (GFM/GFM-exp; used to skip non-CONUS scenes)
 - **Date filters:** `--after-date` (YYYY-MM-DD), `--before-date` (YYYY-MM-DD), `--dates` (comma-separated list). Limit processing to a date range or specific dates. **GFM-exp:** filters by date folder (top-level PI4 dirs). **GFM:** filters by scene acquisition date (parsed from Sentinel product name in path). Applied in order: after_date, then before_date, then dates list.
 
-Batch-worker mode (GFM/GFM-exp) also uses: `--mode batch-worker`, `--manifest-s3-key`, `--partial-parquet-prefix`, `--job-index` (or `AWS_BATCH_JOB_ARRAY_INDEX`), `--scenes-per-job`
+Batch-worker mode (GFM/GFM-exp) also uses: `--mode batch-worker`, `--manifest-s3-key`, `--partial-parquet-prefix`, `--job-index` (or `AWS_BATCH_JOB_ARRAY_INDEX`, `AZ_BATCH_TASK_ID`, `BATCH_TASK_INDEX`), `--scenes-per-job`, `--workers`
 
 ### Processing Pipeline
 
@@ -643,18 +672,21 @@ Each entry in `owp:huc_summaries` has this structure:
 | `metrics.affected_pop` | int | Sum of population raster values over flooded pixels |
 | `metrics.normalized_anomaly_ratio` | float | Ratio of flood pixels to observed-water pixels |
 
-#### Grading Thresholds
+#### [The QC Configuration file](ingest/gfm_exp/qc_config.yaml) sets the thresholds values listed below.
+
+##### Grading Thresholds (version 1.0)
 
 - **Grade A**: uncertainty > 75, observability > 80%, advisory noise < 5%
 - **Grade B**: uncertainty > 60, observability > 60%, advisory noise < 20%
 - **Grade C**: flood signal present but metrics below B thresholds
 - **Grade D**: incomplete data, observability < 50%, or advisory noise > 50%
 
-#### Impact Thresholds
+##### Impact Thresholds (version 1.0)
 
 - **High**: affected population > 100 or flood area > 5 km²
 - **Medium**: affected population > 10 or flood area > 1 km²
 - **Low**: below Medium thresholds
+
 
 ## Shared Utilities
 

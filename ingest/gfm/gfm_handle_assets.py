@@ -20,10 +20,13 @@ class GFMAssetHandler:
     This is a class that exists to create a separation of concerns between metadata and data. Doing this to avoid having to reprocess data that has already been processed when you recreate your collection/collections.
     """
 
-    def __init__(self, s3_utils, bucket_name, derived_metadata_path, results_file="gfm_collection.parquet", initial_results_df=None) -> None:
+    def __init__(self, s3_utils, bucket_name, derived_metadata_path, dfo_geopackage_object_key, results_file="gfm_collection.parquet", initial_results_df=None) -> None:
         self.s3_utils = s3_utils
         self.bucket_name = bucket_name
         self.derived_metadata_path = derived_metadata_path
+        if not dfo_geopackage_object_key:
+            raise ValueError("dfo_geopackage_object_key is required")
+        self.dfo_geopackage_object_key = dfo_geopackage_object_key
         self.results_file = results_file
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.local_results_file = os.path.join(script_dir, results_file)
@@ -265,7 +268,7 @@ class GFMAssetHandler:
         self.download_geopackage(
             self.s3_utils.s3_client,
             self.bucket_name,
-            "benchmark/rs/dfo_all_usa_events_post_2015.gpkg",
+            self.dfo_geopackage_object_key,
             local_geopackage_path,
         )
         gdf = self.load_geopackage(local_geopackage_path)

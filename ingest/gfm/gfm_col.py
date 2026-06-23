@@ -41,26 +41,26 @@ def initialize_s3_utils(profile=None):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--link_type", type=str, default="uri", help='Link type, either "url" or "uri"')
-    parser.add_argument("--bucket_name", type=str, default="fimc-data", help="S3 bucket name")
+    parser.add_argument("--bucket_name", type=str, required=True, help="S3 bucket name")
     parser.add_argument(
         "--catalog_path",
         type=str,
-        default="benchmark/stac-bench-cat/",
+        required=True,
         help="Path to the STAC catalog in the S3 bucket",
     )
     parser.add_argument(
-        "--asset_object_key", type=str, default="benchmark/rs/gfm/", help="S3 prefix for GFM data (parent of DFO event dirs)."
+        "--asset_object_key", type=str, required=True, help="S3 prefix for GFM data (parent of DFO event dirs)."
     )
     parser.add_argument(
         "--hucs_object_key",
         type=str,
-        default="benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg",
-        help="Where to download the gpkg with the huc8 info",
+        required=True,
+        help="S3 key for the HUC8 GeoPackage",
     )
     parser.add_argument(
         "--boundaries_object_key",
         type=str,
-        default="benchmark/stac-bench-cat/assets/Mexico_Canada_boundaries.gpkg",
+        required=True,
         help="S3 key for the Mexico/Canada boundaries GeoPackage",
     )
     parser.add_argument(
@@ -69,7 +69,7 @@ def parse_arguments():
     parser.add_argument(
         "--derived_metadata_path",
         type=str,
-        default="benchmark/stac-bench-cat/assets/derived-asset-data/gfm_collection.parquet",
+        required=True,
         help="S3 key for the derived metadata Parquet file created by asset handling code.",
     )
     parser.add_argument("--skip-owp-qc", action="store_true", help="Skip OWP QC grading (faster runs).")
@@ -121,7 +121,7 @@ def parse_arguments():
         "--job-index",
         type=int,
         default=None,
-        help="Array job index; defaults to AWS_BATCH_JOB_ARRAY_INDEX env var, then 0.",
+        help="Array job index (0-based). Set by entrypoint.sh from the cloud provider's env var.",
     )
     parser.add_argument(
         "--scenes-per-job",
@@ -134,6 +134,18 @@ def parse_arguments():
         type=str,
         default=None,
         help="S3 prefix where per-job partial parquets are written (required in batch-worker mode).",
+    )
+    parser.add_argument(
+        "--dfo-geopackage-object-key",
+        type=str,
+        required=True,
+        help="S3 key for the DFO USA events GeoPackage.",
+    )
+    parser.add_argument(
+        "--readme-object-key",
+        type=str,
+        required=True,
+        help="S3 key for GFM data readme PDF.",
     )
     return parser.parse_args()
 
@@ -227,7 +239,7 @@ def flush_item_batch(s3_utils, bucket_name, catalog_path, catalog_id, collection
     logging.info(f"Flushed batch of items to S3 (prefix {base})")
 
 
-def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
+def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils, readme_object_key):
     collection = pystac.Collection(
         id="gfm-collection",
         description="This collection contains the 50+ Global Flood Monitoring (GFM) flood tile groups identified by using the Dartmouth Flood Observatory (DFO) event data.",
@@ -259,7 +271,7 @@ def create_gfm_collection(link_type, bucket_name, asset_object_key, s3_utils):
             }
         ),
     )
-    readme_href, is_valid = s3_utils.generate_href(bucket_name, f"{asset_object_key}gfm_data_readme.pdf", link_type)
+    readme_href, is_valid = s3_utils.generate_href(bucket_name, readme_object_key, link_type)
     if is_valid:
         collection.assets["naming_conventions"] = pystac.Asset(
             href=readme_href,
@@ -599,6 +611,7 @@ def _process_one_scene(
     country_boundaries,
     derived_metadata_path,
     initial_results_df=None,
+    dfo_geopackage_object_key=None,
 ):
     """Top-level worker for parallel scene processing. Creates own s3_utils and asset_handler."""
     dfo_path, event_id, sent_ti_path = work_item
@@ -613,7 +626,9 @@ def _process_one_scene(
 
     s3_utils = initialize_s3_utils(profile=profile)
     asset_handler = GFMAssetHandler(
-        s3_utils, bucket_name, derived_metadata_path, initial_results_df=initial_results_df
+        s3_utils, bucket_name, derived_metadata_path,
+        dfo_geopackage_object_key=dfo_geopackage_object_key,
+        initial_results_df=initial_results_df,
     )
     item, asset_results = process_tile(
         sent_ti_path,
@@ -632,16 +647,15 @@ def _process_one_scene(
 
 def main_batch_worker(args):
     """Batch-worker entry point: process one manifest slice, flush item JSONs, write partial parquet."""
-    from ingest.batch_utils import read_manifest, upload_partial_parquet
+    import pandas as pd
+    from ingest.batch_utils import load_partial_parquets, read_manifest, upload_partial_parquet
 
     if not args.manifest_s3_key:
         raise ValueError("--manifest-s3-key is required in batch-worker mode")
     if not args.partial_parquet_prefix:
         raise ValueError("--partial-parquet-prefix is required in batch-worker mode")
 
-    job_index = args.job_index
-    if job_index is None:
-        job_index = int(os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX", "0"))
+    job_index = args.job_index if args.job_index is not None else 0
 
     if getattr(args, "profile", None):
         os.environ["AWS_PROFILE"] = args.profile
@@ -663,9 +677,24 @@ def main_batch_worker(args):
     logging.info("Batch worker %d: processing %d scenes (indices %d–%d)",
                  job_index, len(my_scenes), start, start + len(my_scenes) - 1)
 
-    asset_handler = GFMAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
+    asset_handler = GFMAssetHandler(
+        s3_utils, args.bucket_name, args.derived_metadata_path,
+        dfo_geopackage_object_key=args.dfo_geopackage_object_key,
+    )
+    partial_df = load_partial_parquets(s3_utils, args.bucket_name, args.partial_parquet_prefix)
+    if not partial_df.empty:
+        asset_handler.results_df = pd.concat(
+            [asset_handler.results_df, partial_df], ignore_index=True
+        ).drop_duplicates(subset=["sent_ti_path"], keep="last").reset_index(drop=True)
+        logging.info("Batch worker %d: merged %d rows from existing partials into results_df",
+                     job_index, len(partial_df))
+
+    # Upload full slice for this job so changing scenes_per_job between runs does not lose data when overwriting same job index.
     catalog_id = "gfm-collection"
-    collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    collection = create_gfm_collection(
+        args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
+        readme_object_key=args.readme_object_key
+    )
     item_buffer = []
 
     _, hucs_gpkg = os.path.split(args.hucs_object_key)
@@ -680,11 +709,23 @@ def main_batch_worker(args):
 
         work_items = [(s["dfo_path"], s["event_id"], s["sent_ti_path"]) for s in my_scenes]
 
+        skipped_count = 0
         if args.workers <= 1:
             for scene in my_scenes:
                 event_id = scene["event_id"]
                 sent_ti_path = scene["sent_ti_path"]
                 try:
+                    if scene_already_uploaded(
+                        sent_ti_path,
+                        asset_handler.results_df,
+                        s3_utils,
+                        args.bucket_name,
+                        args.catalog_path,
+                        catalog_id,
+                    ):
+                        logging.info("Skipping already-uploaded scene: %s", sent_ti_path)
+                        skipped_count += 1
+                        continue
                     item, asset_results = process_tile(
                         sent_ti_path,
                         event_id,
@@ -703,6 +744,21 @@ def main_batch_worker(args):
                 except Exception as e:
                     logging.warning("Scene %s failed: %s", sent_ti_path, e)
         else:
+            work_items_to_process = []
+            for dfo_path, event_id, sent_ti_path in work_items:
+                if scene_already_uploaded(
+                    sent_ti_path,
+                    asset_handler.results_df,
+                    s3_utils,
+                    args.bucket_name,
+                    args.catalog_path,
+                    catalog_id,
+                ):
+                    skipped_count += 1
+                else:
+                    work_items_to_process.append((dfo_path, event_id, sent_ti_path))
+            work_items = work_items_to_process
+
             worker = partial(
                 _process_one_scene,
                 profile=args.profile,
@@ -714,23 +770,37 @@ def main_batch_worker(args):
                 country_boundaries=country_boundaries,
                 derived_metadata_path=args.derived_metadata_path,
                 initial_results_df=None,
+                dfo_geopackage_object_key=args.dfo_geopackage_object_key,
             )
             with multiprocessing.Pool(args.workers) as pool:
                 for result in pool.imap_unordered(worker, work_items):
-                    item, sent_ti_path, asset_results = result
-                    if item is not None and asset_results is not None:
-                        item_buffer.append(item)
-                        asset_handler.merge_single_result(sent_ti_path, asset_results)
+                    try:
+                        item, sent_ti_path, asset_results = result
+                        if item is not None and asset_results is not None:
+                            item_buffer.append(item)
+                            asset_handler.merge_single_result(sent_ti_path, asset_results)
+                    except Exception as e:
+                        logging.warning("Worker result failed: %s", e)
+
+    if skipped_count > 0:
+        logging.info(
+            "Batch worker %d: skipped %d already-uploaded scenes out of %d total",
+            job_index, skipped_count, len(my_scenes),
+        )
 
     flush_item_batch(s3_utils, args.bucket_name, args.catalog_path, catalog_id, collection, item_buffer)
 
-    if not asset_handler.results_df.empty:
+    my_sent_ti_paths = {s["sent_ti_path"] for s in my_scenes}
+    upload_df = asset_handler.results_df[
+        asset_handler.results_df["sent_ti_path"].isin(my_sent_ti_paths)
+    ]
+    if not upload_df.empty:
         upload_partial_parquet(
             s3_utils,
             args.bucket_name,
             args.partial_parquet_prefix,
             job_index,
-            asset_handler.results_df,
+            upload_df,
         )
 
     logging.info("Batch worker %d done.", job_index)
@@ -758,9 +828,15 @@ def main():
 
     s3_utils = initialize_s3_utils(profile=args.profile)
 
-    collection = create_gfm_collection(args.link_type, args.bucket_name, args.asset_object_key, s3_utils)
+    collection = create_gfm_collection(
+        args.link_type, args.bucket_name, args.asset_object_key, s3_utils,
+        readme_object_key=args.readme_object_key
+    )
     dfo_events = get_dfo_events(s3_utils, args.bucket_name, args.asset_object_key)
-    asset_handler = GFMAssetHandler(s3_utils, args.bucket_name, args.derived_metadata_path)
+    asset_handler = GFMAssetHandler(
+        s3_utils, args.bucket_name, args.derived_metadata_path,
+        dfo_geopackage_object_key=args.dfo_geopackage_object_key,
+    )
     catalog_id = "gfm-collection"
     item_buffer = []
     items_merged = [0]  # mutable so callback can update

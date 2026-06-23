@@ -10,7 +10,7 @@ Usage:
         --derived_metadata_path benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet \
         --catalog_path benchmark/stac-bench-cat/ \
         [--profile my-profile]
-        [--skip-delete-partials]
+        [--keep-partials]
 """
 
 import logging
@@ -26,8 +26,8 @@ def main():
         catalog_id="gfm-expanded-collection",
         collection_creator=create_gfm_exp_collection,
         description="gfm_exp",
-        default_asset_object_key="benchmark/rs/PI4/",
-        default_derived_metadata_path="benchmark/stac-bench-cat/assets/derived-asset-data/gfm_expanded_collection.parquet",
+        default_asset_object_key=None,
+        default_derived_metadata_path=None,
     )
 
 

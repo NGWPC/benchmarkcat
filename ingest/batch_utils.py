@@ -97,6 +97,51 @@ def upload_partial_parquet(
     return key
 
 
+def load_partial_parquets(
+    s3_utils: Any,
+    bucket_name: str,
+    partial_parquet_prefix: str,
+) -> pd.DataFrame:
+    """Load all existing partial parquets and return as a single deduplicated DataFrame.
+
+    Used by batch workers at startup to recognize scenes already processed by
+    sibling workers in a previous (possibly crashed) run, even when the master
+    parquet does not yet exist.
+    """
+    prefix = partial_parquet_prefix.rstrip("/") + "/"
+    paginator = s3_utils.s3_client.get_paginator("list_objects_v2")
+    partial_keys = []
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".parquet"):
+                partial_keys.append(obj["Key"])
+
+    if not partial_keys:
+        return pd.DataFrame()
+
+    frames = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for key in partial_keys:
+            local = os.path.join(tmpdir, os.path.basename(key))
+            try:
+                s3_utils.s3_client.download_file(bucket_name, key, local)
+                frames.append(pd.read_parquet(local))
+                logger.info("Loaded partial %s (%d rows)", key, len(frames[-1]))
+            except s3_utils.s3_client.exceptions.ClientError as e:
+                if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                    logger.warning("Failed to load partial %s: %s", key, e)
+                else:
+                    raise
+
+    if not frames:
+        return pd.DataFrame()
+
+    merged = pd.concat(frames, ignore_index=True)
+    merged = merged.drop_duplicates(subset=["sent_ti_path"], keep="last").reset_index(drop=True)
+    logger.info("Loaded %d rows from %d existing partial parquet(s)", len(merged), len(partial_keys))
+    return merged
+
+
 def merge_partial_parquets(
     s3_utils: Any,
     bucket_name: str,
@@ -128,8 +173,11 @@ def merge_partial_parquets(
             s3_utils.s3_client.download_file(bucket_name, master_key, master_local)
             frames.append(pd.read_parquet(master_local))
             logger.info("Loaded master parquet (%d rows)", len(frames[-1]))
-        except Exception:
-            logger.info("No existing master parquet at %s — starting fresh", master_key)
+        except s3_utils.s3_client.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                logger.info("No existing master parquet at %s — starting fresh", master_key)
+            else:
+                raise
 
         # Load each partial
         for key in partial_keys:
@@ -138,8 +186,11 @@ def merge_partial_parquets(
                 s3_utils.s3_client.download_file(bucket_name, key, local)
                 frames.append(pd.read_parquet(local))
                 logger.info("Loaded partial %s (%d rows)", key, len(frames[-1]))
-            except Exception as e:
-                logger.warning("Failed to load partial %s: %s", key, e)
+            except s3_utils.s3_client.exceptions.ClientError as e:
+                if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                    logger.warning("Failed to load partial %s: %s", key, e)
+                else:
+                    raise
 
         if not frames:
             return pd.DataFrame()
@@ -243,7 +294,7 @@ def run_batch_merge(
 
     Args:
         catalog_id: STAC collection id (e.g. "gfm-collection").
-        collection_creator: Callable(link_type, bucket_name, asset_object_key, s3_utils) -> pystac.Collection.
+        collection_creator: Callable(link_type, bucket_name, asset_object_key, s3_utils, readme_object_key) -> pystac.Collection (for GFM/GFM_EXP).
         description: Short description for argparse help text.
         default_asset_object_key: Default --asset_object_key value.
         default_derived_metadata_path: Default --derived_metadata_path value.
@@ -254,7 +305,7 @@ def run_batch_merge(
     import boto3
 
     parser = argparse.ArgumentParser(description=f"Merge {description} batch-worker outputs.")
-    parser.add_argument("--bucket_name", type=str, default="fimc-data")
+    parser.add_argument("--bucket_name", type=str, required=True)
     parser.add_argument(
         "--partial-parquet-prefix",
         type=str,
@@ -265,18 +316,20 @@ def run_batch_merge(
         "--derived_metadata_path",
         type=str,
         default=default_derived_metadata_path,
+        required=default_derived_metadata_path is None,
         help="S3 key of the master parquet file.",
     )
     parser.add_argument(
         "--catalog_path",
         type=str,
-        default="benchmark/stac-bench-cat/",
+        required=True,
         help="S3 prefix of the STAC catalog.",
     )
     parser.add_argument(
         "--asset_object_key",
         type=str,
         default=default_asset_object_key,
+        required=default_asset_object_key is None,
         help=f"S3 prefix for {description} data (used when creating collection if missing).",
     )
     parser.add_argument(
@@ -286,11 +339,17 @@ def run_batch_merge(
         help='Link type for collection href generation ("uri" or "url").',
     )
     parser.add_argument(
-        "--skip-delete-partials",
+        "--keep-partials",
         action="store_true",
-        help="Do not delete partial parquets after merging (useful for debugging).",
+        help="Keep partial parquets after merging (useful for debugging).",
     )
     parser.add_argument("--profile", type=str, default=None, help="AWS profile name.")
+    parser.add_argument(
+        "--readme-object-key",
+        type=str,
+        required=True,
+        help="S3 key for the GFM data readme PDF.",
+    )
     args = parser.parse_args()
 
     if args.profile is not None:
@@ -326,11 +385,21 @@ def run_batch_merge(
         response = s3_utils.s3_client.get_object(Bucket=args.bucket_name, Key=collection_key)
         collection_dict = json.loads(response["Body"].read().decode("utf-8"))
         collection = pystac.Collection.from_dict(collection_dict)
-    except Exception:
-        logger.warning("Could not load existing collection.json — creating from scratch")
-        collection = collection_creator(
-            args.link_type, args.bucket_name, args.asset_object_key, s3_utils
+    except s3_utils.s3_client.exceptions.ClientError as e:
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            logger.warning("No existing collection.json at %s — creating from scratch", collection_key)
+            collection = collection_creator(
+                args.link_type, args.bucket_name, args.asset_object_key, s3_utils, args.readme_object_key
+            )
+        else:
+            raise
+    else:
+        # Update readme asset href to current config so re-runs fix the path
+        readme_href, _ = s3_utils.generate_href(
+            args.bucket_name, args.readme_object_key, args.link_type
         )
+        if "naming_conventions" in collection.assets:
+            collection.assets["naming_conventions"].href = readme_href
 
     # Remove existing item links so we can re-add from S3 listing
     collection.links = [lk for lk in collection.links if lk.rel != pystac.RelType.ITEM]
@@ -347,7 +416,7 @@ def run_batch_merge(
     logger.info("Collection.json updated.")
 
     # 3. Delete partial parquets
-    if not args.skip_delete_partials:
+    if not args.keep_partials:
         logger.info("Deleting partial parquets...")
         delete_partial_parquets(s3_utils, args.bucket_name, args.partial_parquet_prefix)
 
@@ -380,8 +449,13 @@ def run_batch_split(
     import boto3
 
     parser = argparse.ArgumentParser(description=f"Build {description} scene manifest for batch processing.")
-    parser.add_argument("--bucket_name", type=str, default="fimc-data")
-    parser.add_argument("--asset_object_key", type=str, default=default_asset_object_key)
+    parser.add_argument("--bucket_name", type=str, required=True)
+    parser.add_argument(
+        "--asset_object_key",
+        type=str,
+        default=default_asset_object_key,
+        required=default_asset_object_key is None,
+    )
     parser.add_argument(
         "--manifest-s3-key",
         type=str,
@@ -424,24 +498,29 @@ def run_batch_split(
 
     s3_utils = S3Utils(s3)
 
+    # Date filters come from CLI (or from entrypoint-injected args when running in Batch)
+    after_date = args.after_date or None
+    before_date = args.before_date or None
+    dates = args.dates or None
+
     scenes = discover_scenes(
         s3_utils,
         args.bucket_name,
         args.asset_object_key,
-        args.after_date,
-        args.before_date,
-        args.dates,
+        after_date,
+        before_date,
+        dates,
     )
 
     logger.info("Total scenes: %d", len(scenes))
 
     meta_extra = {}
-    if args.after_date is not None:
-        meta_extra["after_date"] = args.after_date
-    if args.before_date is not None:
-        meta_extra["before_date"] = args.before_date
-    if args.dates is not None:
-        meta_extra["dates"] = args.dates
+    if after_date is not None:
+        meta_extra["after_date"] = after_date
+    if before_date is not None:
+        meta_extra["before_date"] = before_date
+    if dates is not None:
+        meta_extra["dates"] = dates
     write_manifest(
         s3_utils,
         args.bucket_name,

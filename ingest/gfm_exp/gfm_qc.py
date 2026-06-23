@@ -304,7 +304,7 @@ def _metrics_from_layer_arrays(
         metrics["advisory_noise_pct"] = (np.sum(noisy_flood) / flood_count) * 100.0
 
     if pop_arr is not None and pop_arr.shape == flood_arr.shape:
-        pop_valid = (pop_arr != work_nodata) & flood_pixels
+        pop_valid = (pop_arr != work_nodata) & ~np.isnan(pop_arr.astype(float)) & flood_pixels
         metrics["affected_pop"] = float(np.sum(pop_arr[pop_valid]))
 
     if obs_water_arr is not None and obs_water_arr.shape == flood_arr.shape:
