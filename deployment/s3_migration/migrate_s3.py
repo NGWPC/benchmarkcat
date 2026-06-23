@@ -184,11 +184,31 @@ def update_asset_href(
         if parsed.netloc != source_bucket:
             return old_href
         key = parsed.path.lstrip('/')
-    elif 's3.amazonaws.com' in old_href or 's3-' in old_href:
-        if source_bucket not in old_href:
-            return old_href
-        raw = old_href.split(source_bucket)[-1].lstrip('/').split('?')[0]
-        key = raw
+    else:
+        parsed = urlparse(old_href)
+        host = (parsed.hostname or '').lower()
+        path = parsed.path.lstrip('/')
+
+        if parsed.scheme in ('http', 'https'):
+            bucket: Optional[str] = None
+
+            # Path-style:
+            #   https://s3.amazonaws.com/<bucket>/<key>
+            #   https://s3-<region>.amazonaws.com/<bucket>/<key>
+            if host == 's3.amazonaws.com' or host.startswith('s3-'):
+                parts = path.split('/', 1)
+                if len(parts) == 2:
+                    bucket, key = parts[0], parts[1]
+
+            # Virtual-hosted-style:
+            #   https://<bucket>.s3.amazonaws.com/<key>
+            #   https://<bucket>.s3-<region>.amazonaws.com/<key>
+            elif host.endswith('.s3.amazonaws.com') or '.s3-' in host:
+                bucket = host.split('.s3', 1)[0]
+                key = path
+
+            if bucket != source_bucket:
+                return old_href
 
     if key is None:
         logger.debug(f"HREF unchanged (no matching rule): {old_href}")
