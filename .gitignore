@@ -13,6 +13,7 @@ stac/
 # Terraform
 .terraform/
 .terraform.lock.hcl
+!deployment/terraform/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfvars
