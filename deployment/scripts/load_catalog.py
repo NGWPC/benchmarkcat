@@ -193,7 +193,7 @@ def load_collection_to_pgstac(
 
 
 def load_items_to_pgstac(
-    conn: psycopg2.extensions.connection, items: list[dict[str, Any]], batch_size: int = 1
+    conn: psycopg2.extensions.connection, items: list[dict[str, Any]], batch_size: int = 100
 ) -> tuple[int, int, list[str]]:
     """
     Load STAC items into pgstac in batches.
@@ -280,7 +280,7 @@ def load_catalog(
     user: str,
     password: str,
     database: str,
-    batch_size: int = 1,
+    batch_size: int = 100,
     dry_run: bool = False,
 ) -> int:
     """
@@ -510,8 +510,8 @@ Examples:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=1,
-        help="Number of items to load per batch (default: 1)"
+        default=100,
+        help="Number of items to load per batch (default: 100)"
     )
 
     parser.add_argument(
