@@ -34,7 +34,11 @@ Examples:
 
 **Important**: The collection ingestion automatically filters events to include **only the latest revision** for each FSD ID.
 
-If multiple revisions exist on S3 for the same event (e.g., `FSD-1279_R1`, `FSD-1279_R3`, `FSD-1279_R6`), only the highest revision number (`R6`) will be processed and added to the collection. This ensures the catalog contains only the most up-to-date data for each event.
+ICEYE revisions are cumulative — each new revision incorporates all previous SAR satellite passes plus additional ones. As a result, later revisions have larger geographic coverage (the bounding box expands as new passes observe new areas), more detected flooded area, and an updated event timeline. A later revision is strictly a superset of earlier ones, so there is no unique information in an earlier revision that isn't captured and improved upon in the latest.
+
+If multiple revisions exist on S3 for the same event (e.g., `FSD-1279_R1`, `FSD-1279_R3`, `FSD-1279_R6`), only the highest revision number (`R6`) will be processed and added to the collection.
+
+All revision directories are preserved on S3, so prior revisions remain accessible for historical progression analysis if needed.
 
 **Example**:
 - Input: `FSD-1279_R1/`, `FSD-1279_R6/`, `FSD-2082_R1/`, `FSD-2227_R2/`, `FSD-2227_R3/`
@@ -107,16 +111,19 @@ Each STAC item includes the following properties:
 - `start_datetime`: Flood event start time
 - `end_datetime`: Flood event end time
 - `datetime`: The time the current release was created this can be after the event in time in the case of post processing.
+- `flowfiles`: Flowfile object metadata when a flowfile is successfully generated
+
 ## STAC Assets
 
 Each item includes the following asset types:
 
-1. **thumbnail**: PNG thumbnail image generated from flood extent
+1. **thumbnail** / **thumbnail_{region}**: One or more PNG thumbnails generated from flood depth rasters. Single-region events use asset ID `thumbnail`; multi-region events use `thumbnail_north`, `thumbnail_south`, `thumbnail_central`, etc.
 2. **flood_extent_gpkg** / **flood_extent_geojson**: Vector file showing flood extent
 3. **flood_depth_raster**: Raster file showing flood depth values (standardized to inches)
 4. **building_statistics_gpkg** / **building_statistics_geojson**: Building impact statistics
 5. **flood_metadata**: JSON metadata file
 6. **release_notes**: PDF release notes (when available)
+7. **NWM_ANA_flowfile**: CSV with NWM feature IDs and discharge at peak flow (when available)
 
 ## Geometry
 
@@ -191,7 +198,7 @@ for event_path in event_paths:
 
 ### Thumbnail Generation
 
-Thumbnails are automatically generated from flood extent files (GPKG or GeoJSON) and uploaded as PNG images. The thumbnail provides a quick visual preview of the flood extent.
+Thumbnails are automatically generated from flood depth raster files and uploaded as PNG images. The thumbnail provides a quick visual preview of the flood depth.
 
 ### Depth Unit Standardization
 
@@ -216,9 +223,13 @@ All depth measurements are automatically standardized to **inches** for consiste
 
 ## Flowfile Integration
 
-**Note**: ICEYE data does **not** contain NWM (National Water Model) discharge or streamflow data. The `create_flowfile_object()` method is implemented but returns `None` since ICEYE is purely observational SAR-based flood detection without associated hydrologic flow data.
+Each ICEYE event is linked to NWM (National Water Model) Analysis Assimilation discharge data at peak flow. The pipeline:
 
-This is consistent with other remote sensing collections (e.g., GFM - Global Flood Monitoring) that also lack flowfile data. Collections that do include flowfiles are typically those with ground-based or model-based discharge data (BLE, AHPS, Ripple).
+1. **Spatial intersection** — Intersects the flood extent convex hull with the NWM hydrofabric (`nwm_flows.gpkg`) to find overlapping stream segments
+2. **Peak hour search** — Iterates hourly NWM NetCDF files from GCS (`gs://national-water-model/`) across the event's full time range (`start_datetime` to `end_datetime`) and identifies the hour with maximum discharge
+3. **Export** — Writes the peak-hour flow data (`feature_id`, `discharge` in m³/s) as a CSV, uploads to S3, and registers it as an `NWM_ANA_flowfile` asset on the STAC item
+
+Region detection (CONUS/Alaska/Hawaii) is handled automatically by the NWM flow processor based on the event's bounding box. If no NWM features intersect the flood polygon or no data exists for the time range, the flowfile is skipped and the item is created without it.
 
 ## Notes
 
@@ -229,4 +240,4 @@ This is consistent with other remote sensing collections (e.g., GFM - Global Flo
 - PDF release notes are included as metadata assets when available
 - Thumbnails are generated from extent files and stored as PNG images
 - All depth data is standardized to inches with conversion tracking
-- No NWM flowfile data is included (SAR observation only)
+- NWM flowfiles are generated at peak discharge hour when hydrofabric data is available

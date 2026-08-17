@@ -22,24 +22,24 @@ Scale GFM and GFM Expanded ingestion to tens of thousands of scenes using a 3-ph
 ```mermaid
 flowchart LR
   subgraph S3
-    D[Source data<br/>GFM / GFM-exp]
-    M[Manifest<br/>gfm_manifest.jsonl]
-    P[Partial parquets<br/>per worker]
-    OUT[Master parquet +<br/>collection.json]
+    D[Source data\nGFM / GFM-exp]
+    M[Manifest\ngfm_manifest.jsonl]
+    P[Partial parquets\nper worker]
+    OUT[Master parquet +\ncollection.json]
   end
 
   subgraph Phase1["Phase 1 — Split"]
-    SP[batch_split<br/>discovers scenes]
+    SP[batch_split\ndiscovers scenes]
   end
 
   subgraph Phase2["Phase 2 — Workers (array job)"]
-    W0[Child 0<br/>scenes 1–50]
-    W1[Child 1<br/>scenes 51–100]
-    WN[Child N-1<br/>scenes ...]
+    W0[Child 0\nscenes 1–50]
+    W1[Child 1\nscenes 51–100]
+    WN[Child N-1\nscenes ...]
   end
 
   subgraph Phase3["Phase 3 — Merge"]
-    MG[batch_merge<br/>concatenates parquets]
+    MG[batch_merge\nconcatenates parquets]
   end
 
   D --> SP --> M --> Phase2

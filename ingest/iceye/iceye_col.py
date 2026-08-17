@@ -458,12 +458,11 @@ def main():
         process_event(
             event_path, s3_utils, args.bucket_name, args.link_type, collection, args.reprocess_assets, asset_handler
         )
+        asset_handler.upload_modified_parquet()
 
     s3_utils.update_collection(collection, "iceye-collection", args.catalog_path, args.bucket_name)
 
     collection.validate()
-
-    asset_handler.upload_modified_parquet()
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ benchmarkcat/
 │   └── ripple/               # Ripple collection ingestion
 ├── schemas/                   # JSON Schema definitions
 │   ├── ble/v1.0.0/
-│   ├── iceye/v1.0.0/         # ICEYE schemas
+│   ├── iceye/v1.0.0/
 │   ├── gfm/v1.0.0/
 │   └── common_item_metadata/
 ├── scripts/                   # Utility scripts
@@ -39,13 +39,23 @@ benchmarkcat/
 │   ├── build_and_push.sh     # Build & push Docker image to ECR
 │   ├── batch-entrypoint.sh   # Container entrypoint for batch jobs
 │   ├── stac_processor.py     # STAC catalog processing
-│   ├── normalize_cat.py      # Catalog normalization
-│   └── update_asset_links.py # Asset link updates
-├── Dockerfile                 # Container image for ingest
+│   └── normalize_cat.py      # Catalog normalization
+├── terraform/                 # AWS Batch pipeline infrastructure (ECR, compute env, job queue)
+│                              # See docs/aws-batch-pipeline.md for usage
+├── deployment/                # OWP production deployment — STAC API server, asset proxy, and S3 migration
+│   ├── terraform/            # Terraform stack for the STAC API EC2/RDS environment (separate from root terraform/)
+│   ├── asset-proxy/          # Nginx/Python proxy for serving S3 assets over HTTP
+│   ├── s3_migration/         # Scripts to migrate the static S3 catalog to the API
+│   └── scripts/              # Bootstrap and operational scripts for the deployed server
+├── docs/                      # Additional documentation
+│   └── aws-batch-pipeline.md # AWS Batch pipeline setup and reference
+├── Dockerfile                 # Container image for ingest jobs
+├── Dockerfile.orchestration   # Lightweight container for Prefect orchestrator + Terraform
 ├── setup.py                   # Package setup
 └── requirements.txt           # Python dependencies
-
 ```
+
+> **Two Terraform stacks:** `terraform/` at the repo root manages AWS Batch infrastructure (ECR, compute environment, job queue, job definitions) used for scaling GFM/GFM-exp ingestion. `deployment/terraform/` is a separate stack that provisions the OWP production STAC API environment (EC2, RDS, networking). They are independent and must be applied separately.
 
 ## Installation
 
