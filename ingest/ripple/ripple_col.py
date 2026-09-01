@@ -39,25 +39,25 @@ def parse_arguments():
     parser.add_argument(
         "--asset_object_key",
         type=str,
-        default="benchmark/ripple_fim_100/",
+        default="benchmark/ripple_v0.11.x/",
         help="Key for asset object",
     )
     parser.add_argument("--reprocess_assets", action="store_true", help="Reprocess assets")
     parser.add_argument(
         "--derived_metadata_path",
         type=str,
-        default="benchmark/stac-bench-cat/assets/derived-asset-data/ripple_fim_collection.parquet",
+        default="benchmark/stac-bench-cat/assets/derived-asset-data/ripple_v0.11.x_collection.parquet",
     )
     parser.add_argument(
         "--f2fim_ver",
         type=str,
-        default="0_3_0",
+        default="0_5_0",
         help="flows2fim version",
     )
     parser.add_argument(
         "--ripple_ver",
         type=str,
-        default="0_10_3",
+        default="0_11_0",
         help="ripple version",
     )
     parser.add_argument(
@@ -65,6 +65,12 @@ def parse_arguments():
         type=str,
         default="benchmark/stac-bench-cat/assets/WBDHU8_webproj.gpkg",
         help="S3 key for the HUC8 boundaries GeoPackage",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only process the first N subdirectories per source — for testing. Omit for a real run.",
     )
     return parser.parse_args()
 
@@ -122,6 +128,10 @@ def process_ohio_rfc(
 ):
     """Process Ohio RFC data which has a flat directory structure"""
     logging.info(f"Processing ohio_rfc")
+
+    if not s3_utils.list_files_with_extensions(bucket_name, source_path, [".tif"]):
+        logging.warning(f"No raster output found under {source_path} yet — skipping ohio_rfc")
+        return
 
     if asset_handler.assets_processed(source_path) and not reprocess_assets:
         asset_results = asset_handler.read_data_parquet(source_path)
@@ -210,10 +220,9 @@ def process_ohio_rfc(
 
     # Add assets for each magnitude
     for magnitude in asset_results["magnitudes"]:
-        # Add extent raster
         extent_href, is_valid = s3_utils.generate_href(
             bucket_name,
-            f"{source_path}{magnitude}_OhioRFC_extent_f2f_ver_{f2fim_ver}.tif",
+            f"{source_path}{magnitude}_extent_f2f_ver_{f2fim_ver}.tif",
             link_type,
         )
         if is_valid:
@@ -248,12 +257,19 @@ def process_source_directory(
     ripple_ver,
     huc_gdf,
     resolution,
+    limit=None,
 ):
     subdirs = s3_utils.list_subdirectories(bucket_name, source_path)
+    if limit is not None:
+        subdirs = subdirs[:limit]
 
     for subdir in subdirs:
         identifier = subdir.strip("/").split("/")[-1]
         logging.info(f"Processing {source} {identifier}")
+
+        if not s3_utils.list_files_with_extensions(bucket_name, subdir, [".tif"]):
+            logging.warning(f"No raster output found under {subdir} yet — skipping {source} {identifier}")
+            continue
 
         hucs_list = []
 
@@ -282,8 +298,7 @@ def process_source_directory(
         # Compute fractional overlap of each HUC8 polygon
         sel["overlap"] = sel.geometry.apply(lambda h: h.intersection(ripple_geom).area / h.area)
 
-        # Pick only those that truly contain, are contained by,
-        #    or overlap more than 10% of their own area
+        # Pick only those that truly contain, are contained by, or overlap more than 10% of their own area
         final = sel[sel.geometry.contains(ripple_geom) | sel.geometry.within(ripple_geom) | (sel["overlap"] > 0.10)]
 
         # Extract unique HUC8 codes
@@ -343,47 +358,30 @@ def process_source_directory(
         else:
             print(f"Skipping model domain asset for {identifier} - invalid or inaccessible")
 
-        # Add assets for each magnitude
-        for magnitude in asset_results["magnitudes"]:
-            # Add extent raster
-            if "mip" in source:
-                extent_href, is_valid = s3_utils.generate_href(
-                    bucket_name,
-                    f"{subdir}{magnitude}_extent_f2f_ver_{f2fim_ver}.tif",
-                    link_type,
-                )
-                if is_valid:
-                    item.add_asset(
-                        f"{magnitude}_extent",
-                        pystac.Asset(
-                            href=extent_href,
-                            media_type="image/tiff; application=geotiff",
-                            roles=["data"],
-                            title=f"{magnitude} Flood Extent",
-                        ),
-                    )
-                else:
-                    print(f"Skipping extent asset for magnitude {magnitude} for {identifier} - invalid or inaccessible")
+        # Add assets for each magnitude. Identifiers are either bare ids (mip,
+        # mn, nc — e.g. "27141") or id_CommonName (ble — e.g. "12020006_Village").
+        id_parts = identifier.split("_", 1)
+        common_name = id_parts[1] if len(id_parts) > 1 else None
 
+        for magnitude in asset_results["magnitudes"]:
+            if common_name:
+                extent_key = f"{subdir}{magnitude}_{common_name}_extent_f2f_ver_{f2fim_ver}.tif"
             else:
-                common_name = identifier.split("_")[1]
-                extent_href, is_valid = s3_utils.generate_href(
-                    bucket_name,
-                    f"{subdir}{magnitude}_{common_name}_extent_f2f_ver_{f2fim_ver}.tif",
-                    link_type,
+                extent_key = f"{subdir}{magnitude}_extent_f2f_ver_{f2fim_ver}.tif"
+
+            extent_href, is_valid = s3_utils.generate_href(bucket_name, extent_key, link_type)
+            if is_valid:
+                item.add_asset(
+                    f"{magnitude}_extent",
+                    pystac.Asset(
+                        href=extent_href,
+                        media_type="image/tiff; application=geotiff",
+                        roles=["data"],
+                        title=f"{magnitude} Flood Extent",
+                    ),
                 )
-                if is_valid:
-                    item.add_asset(
-                        f"{magnitude}_extent",
-                        pystac.Asset(
-                            href=extent_href,
-                            media_type="image/tiff; application=geotiff",
-                            roles=["data"],
-                            title=f"{magnitude} Flood Extent",
-                        ),
-                    )
-                else:
-                    print(f"Skipping extent asset for magnitude {magnitude} for {identifier} - invalid or inaccessible")
+            else:
+                print(f"Skipping extent asset for magnitude {magnitude} for {identifier} - invalid or inaccessible")
 
         # validate item
         item.validate()
@@ -412,44 +410,26 @@ def main():
         s3_utils, args.bucket_name, args.asset_object_key, args.link_type, flowfile_info
     )
 
-    # # Process BLE data
-    # ble_path = f"{args.asset_object_key}ble/"
-    # process_source_directory(
-    #     ble_path,
-    #     "ble",
-    #     s3_utils,
-    #     args.bucket_name,
-    #     args.link_type,
-    #     collection,
-    #     args.reprocess_assets,
-    #     asset_handler,
-    #     args.f2fim_ver,
-    #     args.ripple_ver,
-    #     huc_gdf,
-    #     resolution=3,
-    # )
+    for source in ("ble", "mip", "mn", "nc"):
+        process_source_directory(
+            f"{args.asset_object_key}{source}/",
+            source,
+            s3_utils,
+            args.bucket_name,
+            args.link_type,
+            collection,
+            args.reprocess_assets,
+            asset_handler,
+            args.f2fim_ver,
+            args.ripple_ver,
+            huc_gdf,
+            resolution=3,
+            limit=args.limit,
+        )
 
-    # # Process MIP data
-    # mip_path = f"{args.asset_object_key}mip/"
-    # process_source_directory(
-    #     mip_path,
-    #     "mip",
-    #     s3_utils,
-    #     args.bucket_name,
-    #     args.link_type,
-    #     collection,
-    #     args.reprocess_assets,
-    #     asset_handler,
-    #     args.f2fim_ver,
-    #     args.ripple_ver,
-    #     huc_gdf,
-    #     resolution=3,
-    # )
-
-    # Process Ohio RFC data (flat directory structure)
-    ohio_rfc_path = f"{args.asset_object_key}ohio_rfc/"
+    # Ohio RFC is a flat directory (source/id split as "ohio"/"rfc"), handled separately.
     process_ohio_rfc(
-        ohio_rfc_path,
+        f"{args.asset_object_key}ohio/rfc/",
         s3_utils,
         args.bucket_name,
         args.link_type,
@@ -462,7 +442,7 @@ def main():
     )
 
     # Update and validate collection
-    s3_utils.update_collection(collection, "ripple-fim-collection", args.catalog_path, args.bucket_name)
+    s3_utils.update_collection_or_bootstrap(collection, "ripple-fim-collection", args.catalog_path, args.bucket_name)
     collection.validate()
 
     # Upload modified parquet file
