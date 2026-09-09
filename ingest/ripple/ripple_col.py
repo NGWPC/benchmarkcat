@@ -126,12 +126,17 @@ def process_ohio_rfc(
     ripple_ver,
     huc_gdf,
 ):
-    """Process Ohio RFC data which has a flat directory structure"""
+    """Process Ohio RFC data which has a flat directory structure.
+
+    Returns the skipped (source, identifier, reason) tuple if no raster
+    output was found yet, else None.
+    """
     logging.info(f"Processing ohio_rfc")
 
     if not s3_utils.list_files_with_extensions(bucket_name, source_path, [".tif"]):
+        reason = "no raster output found"
         logging.warning(f"No raster output found under {source_path} yet — skipping ohio_rfc")
-        return
+        return ("ohio", "rfc", reason)
 
     if asset_handler.assets_processed(source_path) and not reprocess_assets:
         asset_results = asset_handler.read_data_parquet(source_path)
@@ -243,6 +248,8 @@ def process_ohio_rfc(
 
     collection.add_item(item)
 
+    return None
+
 
 def process_source_directory(
     source_path,
@@ -259,16 +266,25 @@ def process_source_directory(
     resolution,
     limit=None,
 ):
+    """Catalog every subdirectory under source_path that has raster output.
+
+    Returns a list of (source, identifier, reason) tuples for subdirectories
+    skipped because no raster output was found yet.
+    """
     subdirs = s3_utils.list_subdirectories(bucket_name, source_path)
     if limit is not None:
         subdirs = subdirs[:limit]
+
+    skipped = []
 
     for subdir in subdirs:
         identifier = subdir.strip("/").split("/")[-1]
         logging.info(f"Processing {source} {identifier}")
 
         if not s3_utils.list_files_with_extensions(bucket_name, subdir, [".tif"]):
+            reason = "no raster output found"
             logging.warning(f"No raster output found under {subdir} yet — skipping {source} {identifier}")
+            skipped.append((source, identifier, reason))
             continue
 
         hucs_list = []
@@ -388,6 +404,8 @@ def process_source_directory(
 
         collection.add_item(item)
 
+    return skipped
+
 
 def main():
     args = parse_arguments()
@@ -410,8 +428,10 @@ def main():
         s3_utils, args.bucket_name, args.asset_object_key, args.link_type, flowfile_info
     )
 
+    skipped = []
+
     for source in ("ble", "mip", "mn", "nc"):
-        process_source_directory(
+        skipped += process_source_directory(
             f"{args.asset_object_key}{source}/",
             source,
             s3_utils,
@@ -428,7 +448,7 @@ def main():
         )
 
     # Ohio RFC is a flat directory (source/id split as "ohio"/"rfc"), handled separately.
-    process_ohio_rfc(
+    ohio_skip = process_ohio_rfc(
         f"{args.asset_object_key}ohio/rfc/",
         s3_utils,
         args.bucket_name,
@@ -440,6 +460,8 @@ def main():
         args.ripple_ver,
         huc_gdf,
     )
+    if ohio_skip is not None:
+        skipped.append(ohio_skip)
 
     # Update and validate collection
     s3_utils.update_collection_or_bootstrap(collection, "ripple-fim-collection", args.catalog_path, args.bucket_name)
@@ -447,6 +469,22 @@ def main():
 
     # Upload modified parquet file
     asset_handler.upload_modified_parquet()
+
+    # Write skipped-library reference file for anyone auditing what didn't make it into
+    # STAC, and upload it to S3 alongside the catalog (the container's local filesystem
+    # doesn't persist past the run).
+    skipped_filename = f"skipped_libraries_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.txt"
+    with tempfile.TemporaryDirectory() as td:
+        local_skipped_path = os.path.join(td, skipped_filename)
+        with open(local_skipped_path, "w") as f:
+            f.write(f"# Libraries skipped from STAC cataloging under {args.asset_object_key} — no raster output found.\n")
+            f.write(f"# {len(skipped)} skipped, generated {datetime.now(timezone.utc).isoformat()}\n")
+            for source, identifier, reason in skipped:
+                f.write(f"{source}_{identifier}\t{reason}\n")
+
+        skipped_s3_key = f"{args.catalog_path}{skipped_filename}"
+        s3_utils.s3_client.upload_file(local_skipped_path, args.bucket_name, skipped_s3_key)
+        logging.info(f"Wrote {len(skipped)} skipped libraries to s3://{args.bucket_name}/{skipped_s3_key}")
 
 
 if __name__ == "__main__":
