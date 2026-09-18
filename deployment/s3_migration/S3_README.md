@@ -7,7 +7,7 @@ Migrates STAC catalog and assets from NGWPC S3 (`fimc-data`) to two dedicated OW
 **Destination Structure:**
 ```
 s3://hv-fim-dev-stac/
-└── benchmark-stac/                          # STAC metadata (~22,800 files, ~200 MB)
+└── benchmark-stac/                          # STAC metadata (~23,000 files, ~200 MB)
     ├── catalog.json                         # Root catalog
     ├── ble-collection/
     │   ├── collection.json
@@ -20,7 +20,7 @@ s3://hv-fim-dev-stac/
     ├── ripple-fim-collection/
     └── usgs-fim-collection/
 
-s3://hv-fim-dev-data/                        # Geospatial assets (1.5 TB)
+s3://hv-fim-dev-data/                        # Geospatial assets (~2.08 TB)
 └── benchmark/
     ├── shared-assets/                       # GPKGs, PDFs, parquet caches
     │   ├── WBDHU8_webproj.gpkg              # Shared HUC8 boundaries
@@ -46,7 +46,7 @@ s3://hv-fim-dev-data/                        # Geospatial assets (1.5 TB)
 | Collection | Source Path | Destination (under `hv-fim-dev-data/benchmark/`) |
 |------------|-------------|--------------------------------------------------|
 | ble-collection | `benchmark/high_resolution_validation_data_ble/` | `ble-collection/` |
-| ripple-fim-collection | `benchmark/ripple_fim_100/` | `ripple-fim-collection/` |
+| ripple-fim-collection | `benchmark/ripple_v0.11.x/` | `ripple-fim-collection/` |
 | hwm-collection | `benchmark/high_water_marks/usgs/` | `hwm-collection/` |
 | nws-fim-collection | `hand_fim/test_cases/nws_test_cases/validation_data_nws/` | `nws-fim-collection/` |
 | usgs-fim-collection | `hand_fim/test_cases/usgs_test_cases/validation_data_usgs/` | `usgs-fim-collection/` |
@@ -57,6 +57,14 @@ s3://hv-fim-dev-data/                        # Geospatial assets (1.5 TB)
 **STAC Catalog:** `benchmark/stac-bench-cat/` → `hv-fim-dev-stac/benchmark-stac/`
 
 **Shared Assets:** GPKGs, PDFs, and parquet caches → `hv-fim-dev-data/benchmark/shared-assets/`
+
+**Known behavior — `gfm-expanded-collection` copies some assets with no catalog item:**
+`migrate_s3.py` copies the whole `benchmark/rs/PI4/` source prefix, not just the assets referenced
+by a linked STAC item. 1,060 scenes (761 Canada + 299 Mexico) are deliberately excluded from the
+catalog by `gfm_exp_col.py`'s `is_within_neighbor_countries()` check, so they have no STAC item
+and no `collection.json` link — but their assets still exist under `rs/PI4/` and still get copied
+to OWP, since the migration has no per-item filtering. Confirmed in
+`docs/gfm-expanded-collection_orphan_investigation.md`.
 
 ## Prerequisites
 
@@ -159,7 +167,7 @@ python migrate_s3.py \
   --aws-profile your-profile \
   --skip-upload
 ```
-Downloads ~22,000 JSON files to `~/benchmark-catalog/source_catalog/` and updates HREFs (Phase 2). Add `--generate-copy-commands` to also produce `copy_assets.sh`.
+Downloads ~23,000 JSON files to `~/benchmark-catalog/source_catalog/` and updates HREFs (Phase 2). Add `--generate-copy-commands` to also produce `copy_assets.sh`.
 
 Verify:
 ```bash
@@ -176,7 +184,7 @@ Runs automatically with Phase 1. Transforms asset paths:
 
 Updated catalog is saved to `~/benchmark-catalog/dest_catalog/`. A manifest of all HREF changes is written to `~/benchmark-catalog/migration_manifest.json`.
 
-### Phase 3: Copy Assets (~8-12 hours, ~1.5TB)
+### Phase 3: Copy Assets (~8-12 hours, ~2.08 TB)
 
 Generate the copy script, then review and execute:
 ```bash
@@ -223,7 +231,7 @@ python migrate_s3.py \
 Verify:
 ```bash
 aws s3 ls s3://hv-fim-dev-stac/benchmark-stac/ --recursive | wc -l
-# Expected: ~22,000
+# Expected: ~23,000
 
 aws s3 cp s3://hv-fim-dev-stac/benchmark-stac/catalog.json - | jq '.'
 
@@ -262,3 +270,128 @@ python migrate_s3.py --source-bucket fimc-data \
 # Assets partially copied?
 ~/benchmark-catalog/copy_assets.sh  # Skips existing files
 ```
+
+## Refreshing a collection after the initial migration
+
+The procedure above is a one-time migration: it assumes OWP's buckets start empty. Once a
+collection has already been migrated, a later refresh (e.g. picking up a new generation run for
+that collection) is a different operation — some upstream items may have been removed as well as
+added, and `migrate_s3.py` has no notion of "diff since last sync." This section covers refreshing
+a single collection in place.
+
+### 1. Identify what changed
+
+Compare the item IDs currently in the source STAC collection against what's already on the STAC
+bucket:
+
+```bash
+aws s3 cp s3://fimc-data/benchmark/stac-bench-cat/ripple-fim-collection/collection.json - \
+  --profile ngwpc | jq -r '.links[] | select(.rel=="item") | .href' | sort > /tmp/source_items.txt
+
+aws s3 ls s3://hv-fim-dev-stac/benchmark-stac/ripple-fim-collection/ --profile owp \
+  | awk '{print $2}' | sed 's#/$##' | sort > /tmp/dest_items.txt
+
+# Items removed upstream, still present on OWP:
+comm -13 /tmp/source_items.txt /tmp/dest_items.txt
+```
+
+Items in that `comm -13` output are superseded — they no longer exist in the live catalog but are
+still on OWP's buckets. Everything else is a straightforward add/update, handled by a normal sync.
+
+### 2. Sync the collection's STAC metadata and assets
+
+Scope both sync commands to the one collection's prefix — do not sync the bucket root. Follow
+the path mapping for the collection from `PATH_MAPPINGS` in `migrate_s3.py` (e.g.
+`ripple-fim-collection` maps source `benchmark/ripple_v0.11.x` → dest `ripple-fim-collection`).
+
+`migrate_s3.py` itself has no per-collection or "refresh" flag — it always downloads and rewrites
+the full catalog. For a single collection, use plain `aws s3 sync` scoped to that collection's
+prefixes instead of re-running the script:
+
+```bash
+# STAC metadata (item and collection JSON) — dry run first
+aws s3 sync s3://fimc-data/benchmark/stac-bench-cat/ripple-fim-collection/ \
+  s3://hv-fim-dev-stac/benchmark-stac/ripple-fim-collection/ \
+  --profile owp --dryrun
+
+# Then for real
+aws s3 sync s3://fimc-data/benchmark/stac-bench-cat/ripple-fim-collection/ \
+  s3://hv-fim-dev-stac/benchmark-stac/ripple-fim-collection/ \
+  --profile owp
+
+# Assets — dry run first
+aws s3 sync s3://fimc-data/benchmark/ripple_v0.11.x/ \
+  s3://hv-fim-dev-data/benchmark/ripple-fim-collection/ \
+  --profile owp --dryrun
+
+# Then for real
+aws s3 sync s3://fimc-data/benchmark/ripple_v0.11.x/ \
+  s3://hv-fim-dev-data/benchmark/ripple-fim-collection/ \
+  --profile owp
+```
+
+Note that any item JSON copied this way still has HREFs pointing at `fimc-data` — this plain
+`aws s3 sync` does not run the HREF rewrite that `migrate_s3.py` Phase 2 performs. If the source
+items don't already carry post-migration HREFs, run the affected items back through
+`update_catalog_hrefs` (Phase 2 of `migrate_s3.py`) before uploading, rather than syncing them
+directly.
+
+### 3. Handle removed items
+
+`aws s3 sync` without `--delete` only adds and updates objects — it never removes anything from
+the destination. Superseded items from step 1 will still be sitting in
+`hv-fim-dev-stac/benchmark-stac/<collection>/` and `hv-fim-dev-data/benchmark/<collection>/` after
+the sync above. Left in place, they resolve normally and look like valid items, so a consumer of
+the catalog sees two generations of extents for the same area with no way to tell which is
+current.
+
+To clear them, use `--delete` scoped to the single collection prefix on both buckets:
+
+```bash
+# Dry run — review exactly what would be deleted before running for real
+aws s3 sync s3://fimc-data/benchmark/stac-bench-cat/ripple-fim-collection/ \
+  s3://hv-fim-dev-stac/benchmark-stac/ripple-fim-collection/ \
+  --profile owp --delete --dryrun
+
+aws s3 sync s3://fimc-data/benchmark/ripple_v0.11.x/ \
+  s3://hv-fim-dev-data/benchmark/ripple-fim-collection/ \
+  --profile owp --delete --dryrun
+
+# Then for real
+aws s3 sync s3://fimc-data/benchmark/stac-bench-cat/ripple-fim-collection/ \
+  s3://hv-fim-dev-stac/benchmark-stac/ripple-fim-collection/ \
+  --profile owp --delete
+
+aws s3 sync s3://fimc-data/benchmark/ripple_v0.11.x/ \
+  s3://hv-fim-dev-data/benchmark/ripple-fim-collection/ \
+  --profile owp --delete
+```
+
+**Warning:** `--delete` only removes objects that are absent from source *within the destination
+prefix given on the command line*. Always give both buckets a collection-scoped prefix
+(`benchmark-stac/<collection>/`, `benchmark/<collection>/`) as shown above. Running `--delete`
+against the bucket root (`s3://hv-fim-dev-stac/` or `s3://hv-fim-dev-data/`) would compare the
+*entire* source tree against the *entire* destination and remove any other collection's objects
+that don't happen to exist at the same relative path in `fimc-data` — this includes
+`shared-assets/` and any collection with a different source layout. Never run `--delete` unscoped.
+
+### 4. Clear stale rows from pgSTAC
+
+If the OWP catalog has already been loaded into pgSTAC (`load_catalog.py`, see
+`../scripts/load_catalog.py` and `Deployment_Runbook.md` Phase 3), syncing S3 is not enough on its
+own. `load_catalog.py` only upserts the collections and items it finds under the given catalog
+directory — it never queries the database for what's already there, so it has no way to know an
+item was removed upstream, and it issues no deletes. Re-running it after a refresh will pick up
+new and changed items but will leave rows for the superseded items sitting in `pgstac.items`
+untouched.
+
+Before re-loading, remove the stale rows for the collection explicitly. Identify them using the
+same item ID list from step 1 (`comm -13` output), then delete by collection and item ID:
+
+```bash
+docker exec -i benchmarkcat-db psql -U pgstac -d stacdb -c \
+  "DELETE FROM pgstac.items WHERE collection = 'ripple-fim-collection' AND id IN ('<item-id-1>', '<item-id-2>');"
+```
+
+Then re-sync `~/stac-catalog` locally (Runbook Phase 3.1) and re-run `load_catalog.py` to load the
+new/changed items for the collection.
