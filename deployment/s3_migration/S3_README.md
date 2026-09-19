@@ -63,8 +63,7 @@ s3://hv-fim-dev-data/                        # Geospatial assets (~2.08 TB)
 by a linked STAC item. 1,060 scenes (761 Canada + 299 Mexico) are deliberately excluded from the
 catalog by `gfm_exp_col.py`'s `is_within_neighbor_countries()` check, so they have no STAC item
 and no `collection.json` link — but their assets still exist under `rs/PI4/` and still get copied
-to OWP, since the migration has no per-item filtering. Confirmed in
-`docs/gfm-expanded-collection_orphan_investigation.md`.
+to OWP, since the migration has no per-item filtering.
 
 ## Prerequisites
 
