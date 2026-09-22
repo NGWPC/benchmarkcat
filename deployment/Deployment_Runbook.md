@@ -246,8 +246,6 @@ aws s3api put-bucket-intelligent-tiering-configuration \
 - `catalog.json` HREFs reference `s3://hv-fim-dev-data/benchmark/...` (not `fimc-data`)
 - EC2 bootstrap is healthy (Phase 1.4)
 
-**Refreshing a single collection after this initial migration** (e.g. a rebuilt generation run) is a different procedure — see "Refreshing a collection after the initial migration" in `S3_README.md`.
-
 ---
 
 ## Phase 3: Catalog Loading
